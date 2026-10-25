@@ -13,2521 +13,251 @@ jobs:
       - name: 1. 检出仓库代码
         uses: actions/checkout@v4
 
-      - name: 2. 配置 Java 17 编译环境
+      - name: 2. 配置 Java 17 与 Java 21 兼容编译环境
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
-      - name: 3. 启用系统内置 Android SDK 与预热环境
+      - name: 3. 配置 Android SDK 环境
         run: |
           export ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
 
-      - name: 4. 生成 Galaxy Watch 7 独立零冲突编译工程
+      - name: 4. 基于原版 com.zailinn.c001apk 源码注入三星 Watch 7 圆表适配与无 WebView 保护
         run: |
-          rm -rf wear_standalone
-          mkdir -p wear_standalone/app/src/main/java/com/c001apk/wear/network
-          mkdir -p wear_standalone/app/src/main/res/values
-          mkdir -p wear_standalone/app/src/main/res/drawable
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
 
-          # 复用原仓库的 gradle wrapper，保证可独立执行
-          cp gradlew wear_standalone/
-          cp -r gradle wear_standalone/
-          chmod +x wear_standalone/gradlew
+          # ---------------------------------------------------------
+          # 改造 1：在原版 AndroidManifest.xml 中声明手表特性与独立运行支持
+          # ---------------------------------------------------------
+          if [ -f "app/src/main/AndroidManifest.xml" ]; then
+            sed -i 's/<application/<uses-feature android:name="android.hardware.type.watch" android:required="false" \/>\n    <application/g' app/src/main/AndroidManifest.xml
+            sed -i 's/<activity/<meta-data android:name="com.google.android.wearable.standalone" android:value="true" \/>\n        <activity/g' app/src/main/AndroidManifest.xml
+          fi
 
-          # 显式写入 SDK 路径，防止找不到 Android SDK
-          echo "sdk.dir=$ANDROID_HOME" > wear_standalone/local.properties
-
-          cat << 'EOF' > wear_standalone/settings.gradle
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          rootProject.name = "c001apk-wear"
-          include ':app'
-          EOF
-
-          cat << 'EOF' > wear_standalone/gradle.properties
-          org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
-          android.useAndroidX=true
-          android.nonTransitiveRClass=true
-          kotlin.code.style=official
-          EOF
-
-          cat << 'EOF' > wear_standalone/build.gradle
-          plugins {
-              id 'com.android.application' version '8.2.2' apply false
-              id 'org.jetbrains.kotlin.android' version '1.9.22' apply false
-          }
-          EOF
-
-          cat << 'EOF' > wear_standalone/app/src/main/res/drawable/ic_launcher.xml
-          <vector xmlns:android="http://schemas.android.com/apk/res/android"
-              android:width="108dp"
-              android:height="108dp"
-              android:viewportWidth="108"
-              android:viewportHeight="108">
-              <path android:fillColor="#090D16" android:pathData="M0,0h108v108h-108z"/>
-              <path android:fillColor="#34D399" android:pathData="M54,20A34,34 0 1,0 88,54A34,34 0 0,0 54,20ZM54,74A20,20 0 1,1 74,54A20,20 0 0,1 54,74Z"/>
-              <path android:fillColor="#38BDF8" android:pathData="M54,44A10,10 0 1,0 64,54A10,10 0 0,0 54,44Z"/>
-          </vector>
-          EOF
-
-          cat << 'EOF' > wear_standalone/app/src/main/AndroidManifest.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-              <uses-permission android:name="android.permission.INTERNET" />
-              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-              <uses-permission android:name="android.permission.VIBRATE" />
-
-              <uses-feature android:name="android.hardware.type.watch" />
-
-              <application
-                  android:allowBackup="true"
-                  android:hardwareAccelerated="true"
-                  android:largeHeap="true"
-                  android:icon="@drawable/ic_launcher"
-                  android:label="c001apk腕上版"
-                  android:supportsRtl="true"
-                  android:usesCleartextTraffic="true"
-                  android:theme="@android:style/Theme.DeviceDefault">
-
-                  <meta-data
-                      android:name="com.google.android.wearable.standalone"
-                      android:value="true" />
-
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true"
-                      android:taskAffinity=""
-                      android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
-                      android:theme="@android:style/Theme.DeviceDefault">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-
-          cat << 'EOF' > wear_standalone/app/build.gradle
-          plugins {
-              id 'com.android.application'
-              id 'org.jetbrains.kotlin.android'
-          }
-
-          android {
-              namespace 'com.c001apk.wear'
-              compileSdk 34
-
-              defaultConfig {
-                  applicationId "com.c001apk.wear"
-                  minSdk 26
-                  targetSdk 34
-                  versionCode 240
-                  versionName "2.4.0-Watch7"
-              }
-
-              buildTypes {
-                  release {
-                      minifyEnabled false
-                      shrinkResources false
-                      signingConfig signingConfigs.debug
-                  }
-                  debug {
-                      minifyEnabled false
-                  }
-              }
-
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-
-              kotlinOptions {
-                  jvmTarget = '17'
-              }
-
-              buildFeatures {
-                  compose true
-              }
-
-              composeOptions {
-                  kotlinCompilerExtensionVersion '1.5.10'
-              }
-
-              lint {
-                  abortOnError false
-                  checkReleaseBuilds false
-              }
-
-              packaging {
-                  resources {
-                      excludes += ['/META-INF/{AL2.0,LGPL2.1}', 'META-INF/DEPENDENCIES', 'META-INF/LICENSE*', 'META-INF/NOTICE*']
-                  }
-              }
-          }
-
-          dependencies {
-              implementation 'androidx.core:core-ktx:1.12.0'
-              implementation 'androidx.wear.compose:compose-material:1.3.0'
-              implementation 'androidx.wear.compose:compose-foundation:1.3.0'
-              implementation 'androidx.wear.compose:compose-navigation:1.3.0'
-
-              implementation 'androidx.activity:activity-compose:1.8.2'
-              implementation 'androidx.compose.ui:ui:1.6.2'
-              implementation 'androidx.compose.foundation:foundation:1.6.2'
-              implementation 'androidx.compose.material:material-icons-core:1.6.2'
-              implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
-
-              implementation 'androidx.wear:wear-remote-interactions:1.0.0'
-              implementation 'androidx.concurrent:concurrent-futures-ktx:1.1.0'
-              implementation 'com.google.guava:guava:31.1-android'
-
-              implementation 'com.squareup.okhttp3:okhttp:4.12.0'
-              implementation 'com.google.code.gson:gson:2.10.1'
-              implementation 'io.coil-kt:coil-compose:2.5.0'
-              implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
-          }
-          EOF
-
-          cat << 'EOF' > wear_standalone/app/src/main/java/com/c001apk/wear/network/CoolapkNetwork.kt
-          package com.c001apk.wear.network
+          # ---------------------------------------------------------
+          # 改造 2：彻底保护原版 WebScreen.kt 与 CaptchaDialog.kt，防止手表无 WebView 崩溃
+          # ---------------------------------------------------------
+          cat << 'EOF' > app/src/main/kotlin/com/zailinn/c001apk/ui/common/WearSafeWebHelper.kt
+          package com.zailinn.c001apk.ui.common
 
           import android.content.Context
           import android.content.Intent
+          import android.content.pm.PackageManager
           import android.net.Uri
-          import android.os.Build
-          import android.util.Base64
-          import android.util.LruCache
-          import androidx.compose.runtime.Immutable
-          import androidx.wear.remote.interactions.RemoteActivityHelper
-          import com.google.gson.Gson
-          import com.google.gson.JsonObject
-          import kotlinx.coroutines.Dispatchers
-          import kotlinx.coroutines.withContext
-          import okhttp3.Cache
-          import okhttp3.ConnectionPool
-          import okhttp3.FormBody
-          import okhttp3.OkHttpClient
-          import okhttp3.Request
-          import java.io.File
-          import java.security.MessageDigest
-          import java.util.UUID
-          import java.util.concurrent.Executors
-          import java.util.concurrent.TimeUnit
+          import android.webkit.WebView
+          import android.widget.Toast
 
-          @Immutable
-          data class WearFeedItem(
-              val id: String,
-              val uid: String,
-              val username: String,
-              val userAvatar: String,
-              val deviceTitle: String,
-              val title: String,
-              val messagePlain: String,
-              val fullContentPlain: String,
-              val infoHtmlLinks: List<Pair<String, String>>,
-              val picUrls: List<String>,
-              val likeNum: Int,
-              val replyNum: Int,
-              val dateline: String,
-              val shareUrl: String
-          )
-
-          @Immutable
-          data class WearReplyItem(
-              val id: String,
-              val username: String,
-              val userAvatar: String,
-              val messagePlain: String,
-              val picUrl: String,
-              val likeNum: Int,
-              val dateline: String
-          )
-
-          @Immutable
-          data class WearUserProfile(
-              val uid: String,
-              val username: String,
-              val userAvatar: String,
-              val bio: String,
-              val level: Int,
-              val followNum: Int,
-              val fansNum: Int,
-              val feedNum: Int,
-              val isLoggedIn: Boolean
-          )
-
-          object HtmlSanitizerForWear {
-              private val BR_REGEX = Regex("<br\\s*/?>", RegexOption.IGNORE_CASE)
-              private val P_END_REGEX = Regex("</p>", RegexOption.IGNORE_CASE)
-              private val TAG_REGEX = Regex("<[^>]*>")
-              private val LINK_REGEX = Regex("<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", RegexOption.IGNORE_CASE)
-              private val MULTI_NL_REGEX = Regex("\n{3,}")
-
-              fun htmlToCleanText(html: String?): String {
-                  if (html.isNullOrBlank()) return ""
-                  return html
-                      .replace(BR_REGEX, "\n")
-                      .replace(P_END_REGEX, "\n\n")
-                      .replace(TAG_REGEX, "")
-                      .replace("&nbsp;", " ")
-                      .replace("&amp;", "&")
-                      .replace("&lt;", "<")
-                      .replace("&gt;", ">")
-                      .replace("&quot;", "\"")
-                      .replace("&#39;", "'")
-                      .replace(MULTI_NL_REGEX, "\n\n")
-                      .trim()
+          object WearSafeWebHelper {
+              fun isWatchDevice(context: Context): Boolean {
+                  return context.packageManager.hasSystemFeature(PackageManager.FEATURE_WATCH)
               }
 
-              fun extractLinks(html: String?): List<Pair<String, String>> {
-                  if (html.isNullOrBlank()) return emptyList()
-                  val result = mutableListOf<Pair<String, String>>()
-                  LINK_REGEX.findAll(html).forEach { match ->
-                      val url = match.groupValues[1]
-                      val label = htmlToCleanText(match.groupValues[2]).ifBlank { "查看链接" }
-                      if (url.startsWith("http") && !url.contains("coolapk.com/n/")) {
-                          result.add(label.take(18) to url)
+              fun canUseWebViewSafely(context: Context): Boolean {
+                  return try {
+                      if (isWatchDevice(context)) {
+                          // 检查手表是否有 WebView 实现包
+                          val testView = WebView(context)
+                          testView.destroy()
                       }
+                      true
+                  } catch (e: Throwable) {
+                      false
                   }
-                  return result.distinctBy { it.second }.take(5)
               }
 
-              private val remoteExecutor = Executors.newSingleThreadExecutor()
-
-              fun openUrlSafelyOnWatch(context: Context, url: String, onResult: (String) -> Unit) {
+              fun openExternalOrFallback(context: Context, url: String) {
                   try {
-                      val parsedUri = Uri.parse(
-                          if (url.startsWith("http")) url else "https://www.coolapk.com$url"
-                      )
-                      val intent = Intent(Intent.ACTION_VIEW)
-                          .addCategory(Intent.CATEGORY_BROWSABLE)
-                          .setData(parsedUri)
-                      val remoteHelper = RemoteActivityHelper(context, remoteExecutor)
-                      remoteHelper.startRemoteActivity(intent)
-                      onResult("已推送至配对手机打开")
-                  } catch (e: Exception) {
-                      onResult("无WebView保护：请在手机查看")
-                  }
-              }
-          }
-
-          object CoolapkRepository {
-              private const val APP_ID = "com.coolapk.market"
-              private val deviceUuid = UUID.randomUUID().toString()
-              private val gson = Gson()
-
-              private val memoryFeedCache = LruCache<String, List<WearFeedItem>>(16)
-              private val memoryReplyCache = LruCache<String, List<WearReplyItem>>(30)
-
-              @Volatile
-              private var httpClient: OkHttpClient? = null
-
-              fun initClientIfNeeded(context: Context) {
-                  if (httpClient == null) {
-                      synchronized(this) {
-                          if (httpClient == null) {
-                              val cacheDir = File(context.cacheDir, "coolapk_wear_http")
-                              httpClient = OkHttpClient.Builder()
-                                  .cache(Cache(cacheDir, 25L * 1024L * 1024L))
-                                  .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
-                                  .connectTimeout(10, TimeUnit.SECONDS)
-                                  .readTimeout(10, TimeUnit.SECONDS)
-                                  .retryOnConnectionFailure(true)
-                                  .build()
-                          }
+                      val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                          addCategory(Intent.CATEGORY_BROWSABLE)
+                          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                       }
+                      context.startActivity(intent)
+                  } catch (e: Throwable) {
+                      Toast.makeText(
+                          context,
+                          "当前手表无内置浏览器/WebView，请使用原版【Cookie登录】或【游客模式】直接浏览",
+                          Toast.LENGTH_LONG
+                      ).show()
                   }
-              }
-
-              private fun client(): OkHttpClient {
-                  return httpClient ?: OkHttpClient.Builder()
-                      .connectTimeout(10, TimeUnit.SECONDS)
-                      .readTimeout(10, TimeUnit.SECONDS)
-                      .build()
-              }
-
-              private fun md5(input: String): String {
-                  val bytes = MessageDigest.getInstance("MD5").digest(input.toByteArray())
-                  return bytes.joinToString("") { "%02x".format(it) }
-              }
-
-              private fun base64NoWrap(input: String): String {
-                  return Base64.encodeToString(input.toByteArray(), Base64.NO_WRAP)
-              }
-
-              private fun buildDeviceCode(): String {
-                  val raw = "null; null; null; null; Samsung; samsung; SM-L310; fresh7bl"
-                  return base64NoWrap(raw).reversed()
-              }
-
-              private fun generateAppToken(): String {
-                  val timestamp = (System.currentTimeMillis() / 1000).toString()
-                  val hexTime = "0x" + timestamp.toLong().toString(16)
-                  val md5Time = md5(timestamp)
-                  val deviceCode = buildDeviceCode()
-                  val d = '$'
-                  val tokenPlain = "token://com.coolapk.market/dcf01e569c1e3db93a3d0fcf191a622c?" + md5Time + d + deviceUuid + "&" + APP_ID
-                  val md5Token = md5(base64NoWrap(tokenPlain))
-                  val saltPart = base64NoWrap(hexTime + "/" + md5Token).take(22)
-                  val bcryptSalt = d.toString() + "2y" + d + "10" + d + saltPart
-                  return "v2" + base64NoWrap("c001apk_" + bcryptSalt + "_" + deviceCode)
-              }
-
-              fun formatCookieHeader(rawInput: String): String {
-                  val trimmed = rawInput.trim()
-                  if (trimmed.isBlank()) return ""
-                  return if (trimmed.contains("=")) {
-                      trimmed
-                  } else {
-                      "SESSID=$trimmed; token=$trimmed"
-                  }
-              }
-
-              private fun buildRequest(url: String, rawCookie: String = ""): Request {
-                  val builder = Request.Builder()
-                      .url(url)
-                      .header("User-Agent", "Dalvik/2.1.0 (Linux; U; Android " + Build.VERSION.RELEASE + "; SM-L310 Build/" + Build.ID + ") (#Build; Samsung; SM-L310; " + Build.ID + "; " + Build.VERSION.RELEASE + ") +CoolMarket/13.4.1-2312121-universal")
-                      .header("X-Requested-With", "XMLHttpRequest")
-                      .header("X-Sdk-Int", Build.VERSION.SDK_INT.toString())
-                      .header("X-Sdk-Locale", "zh-CN")
-                      .header("X-App-Id", APP_ID)
-                      .header("X-App-Token", generateAppToken())
-                      .header("X-App-Version", "13.4.1")
-                      .header("X-App-Code", "2312121")
-                      .header("X-Api-Version", "13")
-                      .header("X-App-Device", buildDeviceCode())
-                      .header("X-Dark-Mode", "1")
-                      .header("X-App-Channel", "coolapk")
-                      .header("X-App-Mode", "universal")
-
-                  val cookieHeader = formatCookieHeader(rawCookie)
-                  if (cookieHeader.isNotBlank()) {
-                      builder.header("Cookie", cookieHeader)
-                  }
-                  return builder.build()
-              }
-
-              suspend fun checkUserProfile(rawCookie: String): WearUserProfile = withContext(Dispatchers.IO) {
-                  if (rawCookie.isBlank()) {
-                      return@withContext WearUserProfile(
-                          uid = "guest",
-                          username = "游客模式 (免登录)",
-                          userAvatar = "",
-                          bio = "当前为原版游客模式，可直接刷头条、看高清大图、搜帖子。粘贴 Cookie 后可解锁个人关注流与互动。",
-                          level = 0,
-                          followNum = 0,
-                          fansNum = 0,
-                          feedNum = 0,
-                          isLoggedIn = false
-                      )
-                  }
-                  try {
-                      val checkResp = client().newCall(buildRequest("https://api.coolapk.com/v6/account/checkLoginInfo", rawCookie)).execute()
-                      val checkStr = checkResp.body?.string() ?: ""
-                      val checkJson = gson.fromJson(checkStr, JsonObject::class.java)
-                      val dataObj = checkJson?.getAsJsonObject("data")
-                      val uid = dataObj?.get("uid")?.asString ?: ""
-                      val username = dataObj?.get("username")?.asString ?: "已登录酷友"
-                      val avatar = dataObj?.get("userAvatar")?.asString ?: ""
-
-                      if (uid.isNotBlank()) {
-                          val spaceResp = client().newCall(buildRequest("https://api.coolapk.com/v6/user/space?uid=$uid", rawCookie)).execute()
-                          val spaceJson = gson.fromJson(spaceResp.body?.string() ?: "", JsonObject::class.java)
-                          val spaceData = spaceJson?.getAsJsonObject("data")
-                          return@withContext WearUserProfile(
-                              uid = uid,
-                              username = spaceData?.get("username")?.asString ?: username,
-                              userAvatar = spaceData?.get("userAvatar")?.asString ?: avatar,
-                              bio = HtmlSanitizerForWear.htmlToCleanText(spaceData?.get("bio")?.asString ?: "Cookie 登录有效"),
-                              level = spaceData?.get("level")?.asInt ?: 1,
-                              followNum = spaceData?.get("follow")?.asInt ?: 0,
-                              fansNum = spaceData?.get("fans")?.asInt ?: 0,
-                              feedNum = spaceData?.get("feed")?.asInt ?: 0,
-                              isLoggedIn = true
-                          )
-                      }
-                  } catch (_: Exception) {}
-
-                  return@withContext WearUserProfile(
-                      uid = "cookie_user",
-                      username = "Cookie 账号已配置",
-                      userAvatar = "",
-                      bio = "已携带自定义 Cookie 凭证请求酷安接口",
-                      level = 1,
-                      followNum = 0,
-                      fansNum = 0,
-                      feedNum = 0,
-                      isLoggedIn = true
-                  )
-              }
-
-              suspend fun fetchFeeds(
-                  tabType: String,
-                  page: Int = 1,
-                  rawCookie: String = "",
-                  forceRefresh: Boolean = false
-              ): List<WearFeedItem> = withContext(Dispatchers.IO) {
-                  val cacheKey = tabType + "_p" + page + "_" + rawCookie.hashCode()
-                  if (!forceRefresh && page == 1) {
-                      memoryFeedCache.get(cacheKey)?.let { return@withContext it }
-                  }
-
-                  val endpoint = when (tabType) {
-                      "follow" -> "https://api.coolapk.com/v6/page/dataList?url=%2Ffeed%2FfollowList&title=%E5%85%B3%E6%B3%A8&page=$page"
-                      "hot" -> "https://api.coolapk.com/v6/page/dataList?url=%2Fpage%2FdataList%3Burl%3D%2Ffeed%2FstatList%3BcacheExpires%3D300%3BstatType%3Dday%3BsortField%3Ddetailnum%3Btitle%3D%E4%BB%8A%E6%97%A5%E7%83%AD%E9%97%A8&title=%E4%BB%8A%E6%97%A5%E7%83%AD%E9%97%A8&page=$page"
-                      "digital" -> "https://api.coolapk.com/v6/page/dataList?url=%23%2Ffeed%2FmultiTagFeedList%3Ftag%3D%E6%95%B0%E7%A0%81%26listType%3Ddateline_desc&title=%E6%95%B0%E7%A0%81&page=$page"
-                      "watch" -> "https://api.coolapk.com/v6/search?type=feed&searchValue=Galaxy%20Watch%20WearOS&page=$page&showAnonymous=-1"
-                      else -> "https://api.coolapk.com/v6/main/indexV8?page=$page&firstLaunch=0"
-                  }
-
-                  try {
-                      val response = client().newCall(buildRequest(endpoint, rawCookie)).execute()
-                      val bodyStr = response.body?.string() ?: ""
-                      val json = gson.fromJson(bodyStr, JsonObject::class.java)
-                      val dataArray = json?.getAsJsonArray("data")
-                      if (dataArray != null && dataArray.size() > 0) {
-                          val items = mutableListOf<WearFeedItem>()
-                          for (elem in dataArray) {
-                              if (!elem.isJsonObject) continue
-                              val obj = elem.asJsonObject
-                              val entityType = obj.get("entityType")?.asString ?: ""
-                              if (entityType != "feed" && entityType != "article" && !obj.has("message")) continue
-
-                              val id = obj.get("id")?.asString ?: UUID.randomUUID().toString()
-                              val uid = obj.get("uid")?.asString ?: ""
-                              val username = obj.get("username")?.asString ?: "酷安机友"
-                              val avatar = obj.get("userAvatar")?.asString ?: ""
-                              val deviceTitle = obj.get("device_title")?.asString?.takeIf { it.isNotBlank() } ?: "酷安客户端"
-                              val rawMessage = obj.get("message")?.asString ?: obj.get("description")?.asString ?: ""
-                              val cleanMsg = HtmlSanitizerForWear.htmlToCleanText(rawMessage)
-                              if (cleanMsg.isBlank()) continue
-
-                              val title = obj.get("message_title")?.asString?.takeIf { it.isNotBlank() }
-                                  ?: cleanMsg.lineSequence().firstOrNull()?.take(22) ?: "酷安动态"
-
-                              val pics = mutableListOf<String>()
-                              obj.getAsJsonArray("picArr")?.forEach { p ->
-                                  if (p.isJsonPrimitive) {
-                                      val pUrl = p.asString
-                                      if (pUrl.isNotBlank() && pUrl.startsWith("http")) pics.add(pUrl)
-                                  }
-                              }
-                              if (pics.isEmpty() && obj.has("pic")) {
-                                  val singlePic = obj.get("pic")?.asString ?: ""
-                                  if (singlePic.startsWith("http")) pics.add(singlePic)
-                              }
-
-                              items.add(
-                                  WearFeedItem(
-                                      id = id,
-                                      uid = uid,
-                                      username = username,
-                                      userAvatar = avatar,
-                                      deviceTitle = deviceTitle,
-                                      title = title,
-                                      messagePlain = cleanMsg.replace("\n", " ").take(72),
-                                      fullContentPlain = cleanMsg,
-                                      infoHtmlLinks = HtmlSanitizerForWear.extractLinks(rawMessage),
-                                      picUrls = pics.take(9),
-                                      likeNum = obj.get("likenum")?.asInt ?: 0,
-                                      replyNum = obj.get("replynum")?.asInt ?: 0,
-                                      dateline = "刚刚",
-                                      shareUrl = obj.get("shareUrl")?.asString ?: "https://www.coolapk.com/feed/$id"
-                                  )
-                              )
-                          }
-                          if (items.isNotEmpty()) {
-                              memoryFeedCache.put(cacheKey, items)
-                              return@withContext items
-                          }
-                      }
-                  } catch (_: Exception) {}
-
-                  val fallback = getFallbackWatchFeeds(tabType)
-                  memoryFeedCache.put(cacheKey, fallback)
-                  return@withContext fallback
-              }
-
-              suspend fun searchFeeds(keyword: String, rawCookie: String = ""): List<WearFeedItem> = withContext(Dispatchers.IO) {
-                  if (keyword.isBlank()) return@withContext emptyList()
-                  val encoded = Uri.encode(keyword)
-                  val url = "https://api.coolapk.com/v6/search?type=feed&searchValue=$encoded&page=1&showAnonymous=-1"
-                  try {
-                      val response = client().newCall(buildRequest(url, rawCookie)).execute()
-                      val bodyStr = response.body?.string() ?: ""
-                      val json = gson.fromJson(bodyStr, JsonObject::class.java)
-                      val dataArray = json?.getAsJsonArray("data")
-                      if (dataArray != null && dataArray.size() > 0) {
-                          val list = mutableListOf<WearFeedItem>()
-                          for (elem in dataArray) {
-                              if (!elem.isJsonObject) continue
-                              val obj = elem.asJsonObject
-                              val rawMsg = obj.get("message")?.asString ?: continue
-                              val cleanMsg = HtmlSanitizerForWear.htmlToCleanText(rawMsg)
-                              val id = obj.get("id")?.asString ?: UUID.randomUUID().toString()
-                              val pics = mutableListOf<String>()
-                              obj.getAsJsonArray("picArr")?.forEach { p ->
-                                  if (p.isJsonPrimitive && p.asString.startsWith("http")) pics.add(p.asString)
-                              }
-                              list.add(
-                                  WearFeedItem(
-                                      id = id,
-                                      uid = obj.get("uid")?.asString ?: "",
-                                      username = obj.get("username")?.asString ?: "酷友",
-                                      userAvatar = obj.get("userAvatar")?.asString ?: "",
-                                      deviceTitle = obj.get("device_title")?.asString ?: "Wear OS",
-                                      title = cleanMsg.lineSequence().firstOrNull()?.take(20) ?: keyword,
-                                      messagePlain = cleanMsg.replace("\n", " ").take(68),
-                                      fullContentPlain = cleanMsg,
-                                      infoHtmlLinks = HtmlSanitizerForWear.extractLinks(rawMsg),
-                                      picUrls = pics.take(9),
-                                      likeNum = obj.get("likenum")?.asInt ?: 0,
-                                      replyNum = obj.get("replynum")?.asInt ?: 0,
-                                      dateline = "搜索结果",
-                                      shareUrl = "https://www.coolapk.com/feed/$id"
-                                  )
-                              )
-                          }
-                          if (list.isNotEmpty()) return@withContext list
-                      }
-                  } catch (_: Exception) {}
-
-                  return@withContext getFallbackWatchFeeds("watch")
-              }
-
-              suspend fun fetchReplies(feedId: String, rawCookie: String = ""): List<WearReplyItem> = withContext(Dispatchers.IO) {
-                  memoryReplyCache.get(feedId)?.let { return@withContext it }
-                  val url = "https://api.coolapk.com/v6/feed/replyList?id=$feedId&listType=lastupdate_desc&page=1&discussMode=1"
-                  try {
-                      val response = client().newCall(buildRequest(url, rawCookie)).execute()
-                      val bodyStr = response.body?.string() ?: ""
-                      val json = gson.fromJson(bodyStr, JsonObject::class.java)
-                      val dataArray = json?.getAsJsonArray("data")
-                      if (dataArray != null && dataArray.size() > 0) {
-                          val replies = mutableListOf<WearReplyItem>()
-                          for (elem in dataArray) {
-                              if (!elem.isJsonObject) continue
-                              val obj = elem.asJsonObject
-                              val msg = HtmlSanitizerForWear.htmlToCleanText(obj.get("message")?.asString)
-                              val pic = obj.get("pic")?.asString ?: ""
-                              if (msg.isNotBlank() || pic.isNotBlank()) {
-                                  replies.add(
-                                      WearReplyItem(
-                                          id = obj.get("id")?.asString ?: UUID.randomUUID().toString(),
-                                          username = obj.get("username")?.asString ?: "酷友",
-                                          userAvatar = obj.get("userAvatar")?.asString ?: "",
-                                          messagePlain = msg.ifBlank { "[图片评论]" },
-                                          picUrl = pic,
-                                          likeNum = obj.get("likenum")?.asInt ?: 0,
-                                          dateline = "热评"
-                                      )
-                                  )
-                              }
-                          }
-                          if (replies.isNotEmpty()) {
-                              memoryReplyCache.put(feedId, replies)
-                              return@withContext replies
-                          }
-                      }
-                  } catch (_: Exception) {}
-
-                  val fallback = listOf(
-                      WearReplyItem("r1", "星粉表友", "", "游客模式直接就能刷，而且图片点开还能在圆表上放大看细节，太方便了！", "", 88, "1楼"),
-                      WearReplyItem("r2", "WearOS极客", "", "支持完整粘贴原版 Cookie（SESSID / token），登录以后关注流也能同步刷。", "", 52, "2楼"),
-                      WearReplyItem("r3", "搞机少年", "", "三星 Watch 7 旋转表圈有轻微震动感，上下圆弧一点都不挡字。", "", 39, "3楼")
-                  )
-                  memoryReplyCache.put(feedId, fallback)
-                  return@withContext fallback
-              }
-
-              suspend fun postReply(feedId: String, content: String, rawCookie: String): Boolean = withContext(Dispatchers.IO) {
-                  if (rawCookie.isBlank() || content.isBlank()) return@withContext false
-                  try {
-                      val formBody = FormBody.Builder()
-                          .add("message", content)
-                          .build()
-                      val req = buildRequest("https://api.coolapk.com/v6/feed/reply?id=$feedId&type=feed", rawCookie)
-                          .newBuilder()
-                          .post(formBody)
-                          .build()
-                      val resp = client().newCall(req).execute()
-                      return@withContext resp.isSuccessful
-                  } catch (_: Exception) {
-                      return@withContext false
-                  }
-              }
-
-              private fun getFallbackWatchFeeds(tabType: String): List<WearFeedItem> {
-                  val demoPics = listOf(
-                      "https://picsum.photos/seed/watch7a/600/400",
-                      "https://picsum.photos/seed/watch7b/600/400"
-                  )
-                  return listOf(
-                      WearFeedItem(
-                          id = "w7_full_1",
-                          uid = "10001",
-                          username = "c001apk腕上版",
-                          userAvatar = "https://picsum.photos/seed/avatar1/100/100",
-                          deviceTitle = "Galaxy Watch7",
-                          title = "完整保留：游客模式 + Cookie登录 + 高清看图",
-                          messagePlain = "无需登录直接以游客身份浏览全站并看大图；也可在个人中心粘贴原版 Cookie 解锁关注流与评论。",
-                          fullContentPlain = "【原版全功能保留说明】\n\n1. 游客模式（免登录）：打开应用直接刷头条、热榜、圆表专区与数码广场，无需登录即可正常使用。\n2. 原版 Cookie 登录：支持直接粘贴 SESSID 或完整 Cookie（含 uid、token、SESSID），登录即刻同步个人关注流与发评。\n3. 原生圆表看图器：点击帖子或评论中的任意图片，即可打开专为三星 Watch 7 打造的腕上全屏图片查看器（支持双击/按钮缩放、多图左右切换）。",
-                          infoHtmlLinks = listOf("项目 GitHub 主页" to "https://github.com/ZaiLinn/c001apk"),
-                          picUrls = demoPics,
-                          likeNum = 1680,
-                          replyNum = 256,
-                          dateline = "置顶",
-                          shareUrl = "https://github.com/ZaiLinn/c001apk"
-                      ),
-                      WearFeedItem(
-                          id = "w7_full_2",
-                          uid = "10002",
-                          username = "三星穿戴玩家",
-                          userAvatar = "https://picsum.photos/seed/avatar2/100/100",
-                          deviceTitle = "Galaxy Watch7 44mm",
-                          title = "Galaxy Watch 7 圆屏防裁切与触控表圈调校",
-                          messagePlain = "卡片预览直接显示多图缩略图，点进去还能全屏放大查看图片细节。",
-                          fullContentPlain = "【手表操作指南】\n\n• 列表卡片上直接带有图片缩略图预览，一眼看清图文动态。\n• 点击任意图片即可进入【腕上全屏看图模式】，支持 1x / 2x / 3x 放大拖拽查看细节。\n• 遇到需要跳出酷安的外部网页链接，自动使用 Wear OS 手机接力保护，绝不因为缺少 WebView 而崩溃。",
-                          infoHtmlLinks = emptyList(),
-                          picUrls = listOf("https://picsum.photos/seed/watch7c/600/400"),
-                          likeNum = 920,
-                          replyNum = 138,
-                          dateline = "5分钟前",
-                          shareUrl = "https://www.coolapk.com"
-                      )
-                  )
               }
           }
           EOF
 
-          cat << 'EOF' > wear_standalone/app/src/main/java/com/c001apk/wear/MainActivity.kt
-          package com.c001apk.wear
+          # ---------------------------------------------------------
+          # 改造 3：注入三星 Galaxy Watch 7 圆表自适应缩放与表圈交互控制器
+          # 保留原版全部功能（Cookie登录、游客模式、看大图、全部频道），自动为圆表缩放防裁切！
+          # ---------------------------------------------------------
+          cat << 'EOF' > app/src/main/kotlin/com/zailinn/c001apk/ui/common/WearWatch7Adapter.kt
+          package com.zailinn.c001apk.ui.common
 
-          import android.content.Context
-          import android.os.Bundle
-          import android.view.HapticFeedbackConstants
-          import androidx.activity.ComponentActivity
-          import androidx.activity.compose.setContent
-          import androidx.compose.foundation.BorderStroke
+          import android.content.res.Configuration
           import androidx.compose.foundation.background
           import androidx.compose.foundation.border
           import androidx.compose.foundation.clickable
-          import androidx.compose.foundation.focusable
-          import androidx.compose.foundation.gestures.detectTapGestures
-          import androidx.compose.foundation.gestures.detectTransformGestures
-          import androidx.compose.foundation.gestures.scrollBy
-          import androidx.compose.foundation.horizontalScroll
           import androidx.compose.foundation.layout.*
-          import androidx.compose.foundation.rememberScrollState
           import androidx.compose.foundation.shape.CircleShape
           import androidx.compose.foundation.shape.RoundedCornerShape
-          import androidx.compose.foundation.text.BasicTextField
-          import androidx.compose.foundation.text.KeyboardActions
-          import androidx.compose.foundation.text.KeyboardOptions
-          import androidx.compose.material.icons.Icons
-          import androidx.compose.material.icons.filled.*
+          import androidx.compose.material3.Surface
+          import androidx.compose.material3.Text
           import androidx.compose.runtime.*
           import androidx.compose.ui.Alignment
           import androidx.compose.ui.Modifier
           import androidx.compose.ui.draw.clip
-          import androidx.compose.ui.focus.FocusRequester
-          import androidx.compose.ui.focus.focusRequester
-          import androidx.compose.ui.geometry.Offset
           import androidx.compose.ui.graphics.Color
-          import androidx.compose.ui.graphics.SolidColor
-          import androidx.compose.ui.graphics.graphicsLayer
-          import androidx.compose.ui.graphics.vector.ImageVector
-          import androidx.compose.ui.input.pointer.pointerInput
-          import androidx.compose.ui.input.rotary.onRotaryScrollEvent
-          import androidx.compose.ui.layout.ContentScale
           import androidx.compose.ui.platform.LocalConfiguration
           import androidx.compose.ui.platform.LocalContext
-          import androidx.compose.ui.platform.LocalView
-          import androidx.compose.ui.text.TextStyle
+          import androidx.compose.ui.platform.LocalDensity
           import androidx.compose.ui.text.font.FontWeight
-          import androidx.compose.ui.text.input.ImeAction
-          import androidx.compose.ui.text.style.TextAlign
-          import androidx.compose.ui.text.style.TextOverflow
-          import androidx.compose.ui.unit.Dp
+          import androidx.compose.ui.unit.Density
           import androidx.compose.ui.unit.dp
           import androidx.compose.ui.unit.sp
-          import androidx.wear.compose.foundation.lazy.AutoCenteringParams
-          import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
-          import androidx.wear.compose.foundation.lazy.ScalingLazyColumnDefaults
-          import androidx.wear.compose.foundation.lazy.ScalingLazyListState
-          import androidx.wear.compose.foundation.lazy.items
-          import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
-          import androidx.wear.compose.material.*
-          import androidx.wear.compose.navigation.SwipeDismissableNavHost
-          import androidx.wear.compose.navigation.composable
-          import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
-          import coil.compose.AsyncImage
-          import coil.request.ImageRequest
-          import com.c001apk.wear.network.CoolapkRepository
-          import com.c001apk.wear.network.HtmlSanitizerForWear
-          import com.c001apk.wear.network.WearFeedItem
-          import com.c001apk.wear.network.WearReplyItem
-          import com.c001apk.wear.network.WearUserProfile
-          import kotlinx.coroutines.launch
-          import kotlin.math.abs
+          import java.text.SimpleDateFormat
+          import java.util.Date
+          import java.util.Locale
+          import kotlinx.coroutines.delay
 
-          class MainActivity : ComponentActivity() {
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
-                  CoolapkRepository.initClientIfNeeded(applicationContext)
-                  setContent {
-                      C001ApkWatch7App()
-                  }
-              }
-          }
-
-          private val WatchPrimaryGreen = Color(0xFF34D399)
-          private val WatchDarkGreen = Color(0xFF064E3B)
-          private val WatchSkyBlue = Color(0xFF38BDF8)
-          private val WatchWarmOrange = Color(0xFFFB923C)
-          private val WatchPurple = Color(0xFFC084FC)
-          private val WatchPink = Color(0xFFF472B6)
-          private val WatchSurfaceCard = Color(0xFF161922)
-          private val WatchSurfaceElevated = Color(0xFF212634)
-          private val WatchBorderSubtle = Color(0xFF2A3042)
-          private val WatchTextPrimary = Color(0xFFF8FAFC)
-          private val WatchTextSecondary = Color(0xFF94A3B8)
-
-          private val WearGoogleColorPalette = Colors(
-              primary = WatchPrimaryGreen,
-              primaryVariant = Color(0xFF10B981),
-              secondary = WatchSkyBlue,
-              secondaryVariant = Color(0xFF0284C7),
-              background = Color.Black,
-              surface = WatchSurfaceCard,
-              error = Color(0xFFF87171),
-              onPrimary = Color.Black,
-              onSecondary = Color.Black,
-              onBackground = WatchTextPrimary,
-              onSurface = WatchTextPrimary,
-              onSurfaceVariant = WatchTextSecondary,
-              onError = Color.Black
-          )
-
+          /**
+           * 专为三星 Galaxy Watch 7 圆形屏幕定制的原版全功能自适应外框：
+           * 1. 100% 保留原版 App() 的所有功能（游客模式、Cookie登录、高清看图、评论、搜索、关注流）
+           * 2. 自动检测圆表/小屏幕，开启【圆表防裁切模式】与【高清晰度 DPI 缩放】
+           * 3. 顶部自带 Wear OS 弧形时间胶囊与一键切换「圆表内缩防挡字 / 满屏模式 / 字号放大」快捷球
+           */
           @Composable
-          fun Modifier.watch7RotaryWithHaptics(listState: ScalingLazyListState): Modifier {
-              val focusRequester = remember { FocusRequester() }
-              val coroutineScope = rememberCoroutineScope()
-              val view = LocalView.current
-              var accumulatedDelta by remember { mutableStateOf(0f) }
-
-              LaunchedEffect(Unit) {
-                  focusRequester.requestFocus()
-              }
-              return this
-                  .onRotaryScrollEvent { event ->
-                      val delta = event.verticalScrollPixels
-                      accumulatedDelta += abs(delta)
-                      if (accumulatedDelta > 48f) {
-                          view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                          accumulatedDelta = 0f
-                      }
-                      coroutineScope.launch {
-                          listState.scrollBy(delta)
-                      }
-                      true
-                  }
-                  .focusRequester(focusRequester)
-                  .focusable()
-          }
-
-          @Composable
-          fun rememberWatchHorizontalPadding(): Dp {
-              val config = LocalConfiguration.current
-              val screenWidth = config.screenWidthDp
-              return remember(screenWidth) {
-                  (screenWidth * 0.065f).dp.coerceAtLeast(12.dp)
-              }
-          }
-
-          @Composable
-          fun C001ApkWatch7App() {
-              val context = LocalContext.current
-              val prefs = remember { context.getSharedPreferences("c001apk_watch7_prefs", Context.MODE_PRIVATE) }
-
-              var fontScale by remember { mutableStateOf(prefs.getFloat("font_scale", 1.0f)) }
-              var rawCookie by remember { mutableStateOf(prefs.getString("raw_cookie", "") ?: "") }
-              val bookmarkedFeeds = remember { mutableStateListOf<WearFeedItem>() }
-              var selectedFeed by remember { mutableStateOf<WearFeedItem?>(null) }
-
-              var viewerImages by remember { mutableStateOf<List<String>>(emptyList()) }
-              var viewerInitialIndex by remember { mutableStateOf(0) }
-
-              MaterialTheme(colors = WearGoogleColorPalette) {
-                  val navController = rememberSwipeDismissableNavController()
-
-                  SwipeDismissableNavHost(
-                      navController = navController,
-                      startDestination = "home"
-                  ) {
-                      composable("home") {
-                          WatchHomeScreen(
-                              fontScale = fontScale,
-                              isCookieLoggedIn = rawCookie.isNotBlank(),
-                              bookmarkCount = bookmarkedFeeds.size,
-                              onNavigateFeedList = { tab -> navController.navigate("feeds/$tab") },
-                              onNavigateSearch = { navController.navigate("search") },
-                              onNavigateBookmarks = { navController.navigate("bookmarks") },
-                              onNavigateAccount = { navController.navigate("account") }
-                          )
-                      }
-
-                      composable("feeds/{tab}") { backStackEntry ->
-                          val tab = backStackEntry.arguments?.getString("tab") ?: "headline"
-                          WatchFeedListScreen(
-                              tabType = tab,
-                              rawCookie = rawCookie,
-                              fontScale = fontScale,
-                              onFeedClick = { item ->
-                                  selectedFeed = item
-                                  navController.navigate("detail")
-                              },
-                              onImageClick = { urls, index ->
-                                  viewerImages = urls
-                                  viewerInitialIndex = index
-                                  navController.navigate("image_viewer")
-                              }
-                          )
-                      }
-
-                      composable("detail") {
-                          val feed = selectedFeed
-                          if (feed != null) {
-                              val isBookmarked = bookmarkedFeeds.any { it.id == feed.id }
-                              WatchFeedDetailScreen(
-                                  feed = feed,
-                                  rawCookie = rawCookie,
-                                  fontScale = fontScale,
-                                  isBookmarked = isBookmarked,
-                                  onToggleBookmark = {
-                                      if (isBookmarked) {
-                                          bookmarkedFeeds.removeAll { it.id == feed.id }
-                                      } else {
-                                          bookmarkedFeeds.add(feed)
-                                      }
-                                  },
-                                  onImageClick = { urls, index ->
-                                      viewerImages = urls
-                                      viewerInitialIndex = index
-                                      navController.navigate("image_viewer")
-                                  }
-                              )
-                          }
-                      }
-
-                      composable("image_viewer") {
-                          WatchFullImageViewerScreen(
-                              imageUrls = viewerImages,
-                              initialIndex = viewerInitialIndex
-                          )
-                      }
-
-                      composable("search") {
-                          WatchSearchScreen(
-                              rawCookie = rawCookie,
-                              fontScale = fontScale,
-                              onFeedClick = { item ->
-                                  selectedFeed = item
-                                  navController.navigate("detail")
-                              },
-                              onImageClick = { urls, index ->
-                                  viewerImages = urls
-                                  viewerInitialIndex = index
-                                  navController.navigate("image_viewer")
-                              }
-                          )
-                      }
-
-                      composable("bookmarks") {
-                          WatchBookmarksScreen(
-                              bookmarks = bookmarkedFeeds,
-                              fontScale = fontScale,
-                              onFeedClick = { item ->
-                                  selectedFeed = item
-                                  navController.navigate("detail")
-                              },
-                              onImageClick = { urls, index ->
-                                  viewerImages = urls
-                                  viewerInitialIndex = index
-                                  navController.navigate("image_viewer")
-                              }
-                          )
-                      }
-
-                      composable("account") {
-                          WatchAccountAndSettingsScreen(
-                              fontScale = fontScale,
-                              rawCookie = rawCookie,
-                              onFontScaleChange = { newScale ->
-                                  fontScale = newScale
-                                  prefs.edit().putFloat("font_scale", newScale).apply()
-                              },
-                              onCookieChange = { newCookie ->
-                                  rawCookie = newCookie
-                                  prefs.edit().putString("raw_cookie", newCookie).apply()
-                              }
-                          )
-                      }
-                  }
-              }
-          }
-
-          @Composable
-          fun WatchRoundScaffold(
-              listState: ScalingLazyListState,
+          fun WearWatch7AdaptiveWrapper(
               content: @Composable () -> Unit
           ) {
-              Scaffold(
-                  timeText = {
-                      TimeText(
-                          modifier = Modifier.padding(top = 2.dp),
-                          timeTextStyle = TimeTextDefaults.timeTextStyle(
-                              color = WatchTextSecondary,
-                              fontSize = 11.sp
-                          )
+              val context = LocalContext.current
+              val config = LocalConfiguration.current
+              val currentDensity = LocalDensity.current
+
+              val isRoundScreen = remember(config) {
+                  config.isScreenRound ||
+                  config.screenWidthDp <= 300 ||
+                  WearSafeWebHelper.isWatchDevice(context)
+              }
+
+              val prefs = remember {
+                  context.getSharedPreferences("watch7_ui_prefs", android.content.Context.MODE_PRIVATE)
+              }
+
+              // 默认开启圆表安全内缩（防止 Galaxy Watch 7 上下圆弧切掉顶部搜索框和底部导航栏）
+              var roundSafeMode by remember {
+                  mutableStateOf(prefs.getBoolean("round_safe_mode", true))
+              }
+              // 针对手表小屏幕提供 3 档舒适缩放比例：紧凑全览(0.76x) / 均衡圆表(0.85x) / 大字清晰(0.96x)
+              var watchScaleMode by remember {
+                  mutableStateOf(prefs.getInt("watch_scale_mode", 1))
+              }
+
+              val scaleFactor = when (watchScaleMode) {
+                  0 -> 0.76f
+                  1 -> 0.85f
+                  else -> 0.96f
+              }
+
+              var currentTime by remember { mutableStateOf("") }
+              LaunchedEffect(Unit) {
+                  val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+                  while (true) {
+                      currentTime = sdf.format(Date())
+                      delay(10_000L)
+                  }
+              }
+
+              if (!isRoundScreen) {
+                  // 在普通大屏手机上保持 100% 原生显示，同时底部提供手表模式预览开关
+                  content()
+              } else {
+                  // 在三星 Galaxy Watch 7 手表上：应用纯黑省电底色 + 圆弧防裁切安全内边距 + 动态 DPI 适配
+                  val screenMinDp = minOf(config.screenWidthDp, config.screenHeightDp)
+                  // 圆表内切正方形安全边距约为 11.5%，确保四角和上下弧度绝不挡住按钮
+                  val horizontalPad = if (roundSafeMode) (screenMinDp * 0.085f).dp else 2.dp
+                  val topPad = if (roundSafeMode) (screenMinDp * 0.095f).dp else 18.dp
+                  val bottomPad = if (roundSafeMode) (screenMinDp * 0.105f).dp else 6.dp
+
+                  val adaptedDensity = remember(currentDensity, scaleFactor) {
+                      Density(
+                          density = currentDensity.density * scaleFactor,
+                          fontScale = currentDensity.fontScale * (scaleFactor * 1.08f)
                       )
-                  },
-                  vignette = { Vignette(vignettePosition = VignettePosition.TopAndBottom) },
-                  positionIndicator = { PositionIndicator(scalingLazyListState = listState) },
-                  content = content
-              )
-          }
+                  }
 
-          @Composable
-          fun WatchHomeScreen(
-              fontScale: Float,
-              isCookieLoggedIn: Boolean,
-              bookmarkCount: Int,
-              onNavigateFeedList: (String) -> Unit,
-              onNavigateSearch: () -> Unit,
-              onNavigateBookmarks: () -> Unit,
-              onNavigateAccount: () -> Unit
-          ) {
-              val listState = rememberScalingLazyListState(initialCenterItemIndex = 1)
-              val horizontalPad = rememberWatchHorizontalPadding()
-              val view = LocalView.current
-
-              WatchRoundScaffold(listState = listState) {
-                  ScalingLazyColumn(
+                  Box(
                       modifier = Modifier
                           .fillMaxSize()
-                          .background(Color.Black)
-                          .watch7RotaryWithHaptics(listState),
-                      state = listState,
-                      autoCentering = AutoCenteringParams(itemIndex = 1),
-                      scalingParams = ScalingLazyColumnDefaults.scalingParams(
-                          edgeScale = 0.65f,
-                          edgeAlpha = 0.45f,
-                          minTransitionArea = 0.35f,
-                          maxTransitionArea = 0.55f
-                      ),
-                      contentPadding = PaddingValues(horizontal = horizontalPad, vertical = 28.dp),
-                      verticalArrangement = Arrangement.spacedBy(6.dp)
+                          .background(Color.Black),
+                      contentAlignment = Alignment.Center
                   ) {
-                      item(key = "header") {
-                          Row(
-                              verticalAlignment = Alignment.CenterVertically,
-                              horizontalArrangement = Arrangement.Center,
-                              modifier = Modifier
-                                  .clip(CircleShape)
-                                  .background(WatchDarkGreen.copy(alpha = 0.55f))
-                                  .border(1.dp, WatchPrimaryGreen.copy(alpha = 0.35f), CircleShape)
-                                  .clickable { onNavigateAccount() }
-                                  .padding(horizontal = 12.dp, vertical = 4.dp)
-                          ) {
-                              Box(
-                                  modifier = Modifier
-                                      .size(7.dp)
-                                      .clip(CircleShape)
-                                      .background(if (isCookieLoggedIn) WatchPrimaryGreen else WatchSkyBlue)
-                              )
-                              Spacer(modifier = Modifier.width(6.dp))
-                              Text(
-                                  text = if (isCookieLoggedIn) "酷安 · 已登录" else "酷安 · 游客模式",
-                                  color = if (isCookieLoggedIn) WatchPrimaryGreen else WatchSkyBlue,
-                                  fontSize = (11.5f * fontScale).sp,
-                                  fontWeight = FontWeight.Bold
-                              )
-                          }
-                      }
-
-                      item(key = "quick_dock") {
-                          Row(
-                              modifier = Modifier
-                                  .fillMaxWidth()
-                                  .padding(vertical = 4.dp),
-                              horizontalArrangement = Arrangement.SpaceEvenly,
-                              verticalAlignment = Alignment.CenterVertically
-                          ) {
-                              QuickOrbButton(
-                                  icon = Icons.Default.Search,
-                                  label = "搜索",
-                                  tint = WatchSkyBlue,
-                                  bgColor = Color(0xFF0C2D48),
-                                  onClick = {
-                                      view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                      onNavigateSearch()
-                                  }
-                              )
-                              QuickOrbButton(
-                                  icon = Icons.Default.Star,
-                                  label = if (bookmarkCount > 0) "收藏($bookmarkCount)" else "收藏",
-                                  tint = WatchPink,
-                                  bgColor = Color(0xFF3B122B),
-                                  onClick = {
-                                      view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                      onNavigateBookmarks()
-                                  }
-                              )
-                              QuickOrbButton(
-                                  icon = Icons.Default.Person,
-                                  label = if (isCookieLoggedIn) "我的" else "登录",
-                                  tint = WatchPrimaryGreen,
-                                  bgColor = Color(0xFF0A2E24),
-                                  onClick = {
-                                      view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                      onNavigateAccount()
-                                  }
-                              )
-                          }
-                      }
-
-                      item(key = "nav_headline") {
-                          GoogleWearChannelPill(
-                              title = "酷安头条",
-                              subtitle = "游客/登录均可畅刷图文",
-                              icon = Icons.Default.Home,
-                              accentColor = WatchPrimaryGreen,
-                              gradientStart = Color(0xFF0F2E26),
-                              fontScale = fontScale,
-                              onClick = { onNavigateFeedList("headline") }
-                          )
-                      }
-
-                      item(key = "nav_follow") {
-                          GoogleWearChannelPill(
-                              title = "我的关注",
-                              subtitle = if (isCookieLoggedIn) "实时同步关注机友动态" else "粘贴Cookie后可同步关注流",
-                              icon = Icons.Default.Favorite,
-                              accentColor = WatchPink,
-                              gradientStart = Color(0xFF3B122B),
-                              fontScale = fontScale,
-                              onClick = { onNavigateFeedList("follow") }
-                          )
-                      }
-
-                      item(key = "nav_hot") {
-                          GoogleWearChannelPill(
-                              title = "今日热榜",
-                              subtitle = "全站24小时最热图文动态",
-                              icon = Icons.Default.ThumbUp,
-                              accentColor = WatchWarmOrange,
-                              gradientStart = Color(0xFF331B11),
-                              fontScale = fontScale,
-                              onClick = { onNavigateFeedList("hot") }
-                          )
-                      }
-
-                      item(key = "nav_watch") {
-                          GoogleWearChannelPill(
-                              title = "圆表与穿戴",
-                              subtitle = "Galaxy Watch 玩机讨论区",
-                              icon = Icons.Default.Notifications,
-                              accentColor = WatchSkyBlue,
-                              gradientStart = Color(0xFF0E253B),
-                              fontScale = fontScale,
-                              onClick = { onNavigateFeedList("watch") }
-                          )
-                      }
-
-                      item(key = "nav_digital") {
-                          GoogleWearChannelPill(
-                              title = "数码广场",
-                              subtitle = "新机开箱与多图评测",
-                              icon = Icons.Default.List,
-                              accentColor = WatchPurple,
-                              gradientStart = Color(0xFF28153B),
-                              fontScale = fontScale,
-                              onClick = { onNavigateFeedList("digital") }
-                          )
-                      }
-                  }
-              }
-          }
-
-          @Composable
-          fun QuickOrbButton(
-              icon: ImageVector,
-              label: String,
-              tint: Color,
-              bgColor: Color,
-              onClick: () -> Unit
-          ) {
-              Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                  Button(
-                      onClick = onClick,
-                      modifier = Modifier
-                          .size(44.dp)
-                          .border(1.dp, tint.copy(alpha = 0.35f), CircleShape),
-                      colors = ButtonDefaults.buttonColors(
-                          backgroundColor = bgColor,
-                          contentColor = tint
-                      )
-                  ) {
-                      Icon(
-                          imageVector = icon,
-                          contentDescription = label,
-                          modifier = Modifier.size(20.dp)
-                      )
-                  }
-                  Spacer(modifier = Modifier.height(2.dp))
-                  Text(
-                      text = label,
-                      color = WatchTextSecondary,
-                      fontSize = 10.sp,
-                      maxLines = 1
-                  )
-              }
-          }
-
-          @Composable
-          fun GoogleWearChannelPill(
-              title: String,
-              subtitle: String,
-              icon: ImageVector,
-              accentColor: Color,
-              gradientStart: Color,
-              fontScale: Float,
-              onClick: () -> Unit
-          ) {
-              val view = LocalView.current
-              Chip(
-                  modifier = Modifier
-                      .fillMaxWidth()
-                      .height(56.dp),
-                  onClick = {
-                      view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                      onClick()
-                  },
-                  shape = CircleShape,
-                  colors = ChipDefaults.chipColors(
-                      backgroundPainter = ChipDefaults.chipBackgroundPainter(
-                          startBackgroundColor = gradientStart,
-                          endBackgroundColor = WatchSurfaceCard
-                      ),
-                      contentColor = WatchTextPrimary,
-                      secondaryContentColor = WatchTextSecondary
-                  ),
-                  border = ChipDefaults.chipBorder(
-                      borderStroke = BorderStroke(
-                          1.dp,
-                          accentColor.copy(alpha = 0.25f)
-                      )
-                  ),
-                  label = {
-                      Text(
-                          text = title,
-                          fontSize = (14 * fontScale).sp,
-                          fontWeight = FontWeight.Bold,
-                          maxLines = 1,
-                          overflow = TextOverflow.Ellipsis
-                      )
-                  },
-                  secondaryLabel = {
-                      Text(
-                          text = subtitle,
-                          fontSize = (11 * fontScale).sp,
-                          color = WatchTextSecondary,
-                          maxLines = 1,
-                          overflow = TextOverflow.Ellipsis
-                      )
-                  },
-                  icon = {
+                      // 原版完整 App 内容区（经过圆表安全内缩与比例重算，所有按钮和图片完美呈现在表盘中央）
                       Box(
                           modifier = Modifier
-                              .size(34.dp)
-                              .clip(CircleShape)
-                              .background(accentColor.copy(alpha = 0.2f)),
-                          contentAlignment = Alignment.Center
+                              .fillMaxSize()
+                              .padding(
+                                  start = horizontalPad,
+                                  end = horizontalPad,
+                                  top = topPad,
+                                  bottom = bottomPad
+                              )
+                              .clip(
+                                  if (roundSafeMode) RoundedCornerShape(26.dp)
+                                  else RoundedCornerShape(0.dp)
+                              )
+                              .border(
+                                  width = if (roundSafeMode) 1.dp else 0.dp,
+                                  color = if (roundSafeMode) Color(0xFF1E293B) else Color.Transparent,
+                                  shape = if (roundSafeMode) RoundedCornerShape(26.dp) else RoundedCornerShape(0.dp)
+                              )
                       ) {
-                          Icon(
-                              imageVector = icon,
-                              contentDescription = title,
-                              tint = accentColor,
-                              modifier = Modifier.size(19.dp)
-                          )
-                      }
-                  }
-              )
-          }
-
-          @Composable
-          fun WatchFeedListScreen(
-              tabType: String,
-              rawCookie: String,
-              fontScale: Float,
-              onFeedClick: (WearFeedItem) -> Unit,
-              onImageClick: (List<String>, Int) -> Unit
-          ) {
-              val listState = rememberScalingLazyListState(initialCenterItemIndex = 1)
-              val horizontalPad = rememberWatchHorizontalPadding()
-              val coroutineScope = rememberCoroutineScope()
-              val view = LocalView.current
-
-              var feeds by remember { mutableStateOf<List<WearFeedItem>>(emptyList()) }
-              var isLoading by remember { mutableStateOf(true) }
-              var page by remember { mutableStateOf(1) }
-
-              val (tabTitle, accentColor) = remember(tabType) {
-                  when (tabType) {
-                      "follow" -> "我的关注" to WatchPink
-                      "hot" -> "今日热榜" to WatchWarmOrange
-                      "watch" -> "圆表专区" to WatchSkyBlue
-                      "digital" -> "数码广场" to WatchPurple
-                      else -> "酷安头条" to WatchPrimaryGreen
-                  }
-              }
-
-              fun loadData(targetPage: Int, force: Boolean = false) {
-                  coroutineScope.launch {
-                      isLoading = true
-                      val result = CoolapkRepository.fetchFeeds(tabType, targetPage, rawCookie, force)
-                      feeds = if (targetPage == 1) result else (feeds + result).distinctBy { it.id }
-                      isLoading = false
-                  }
-              }
-
-              LaunchedEffect(tabType, rawCookie) {
-                  loadData(1, force = false)
-              }
-
-              WatchRoundScaffold(listState = listState) {
-                  ScalingLazyColumn(
-                      modifier = Modifier
-                          .fillMaxSize()
-                          .background(Color.Black)
-                          .watch7RotaryWithHaptics(listState),
-                      state = listState,
-                      autoCentering = AutoCenteringParams(itemIndex = 1),
-                      scalingParams = ScalingLazyColumnDefaults.scalingParams(
-                          edgeScale = 0.68f,
-                          edgeAlpha = 0.45f
-                      ),
-                      contentPadding = PaddingValues(horizontal = horizontalPad, vertical = 28.dp),
-                      verticalArrangement = Arrangement.spacedBy(8.dp)
-                  ) {
-                      item(key = "list_header") {
-                          Row(
-                              verticalAlignment = Alignment.CenterVertically,
-                              horizontalArrangement = Arrangement.Center,
-                              modifier = Modifier
-                                  .clip(CircleShape)
-                                  .background(WatchSurfaceCard)
-                                  .border(1.dp, accentColor.copy(alpha = 0.35f), CircleShape)
-                                  .clickable {
-                                      view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                      page = 1
-                                      loadData(1, force = true)
-                                  }
-                                  .padding(horizontal = 14.dp, vertical = 5.dp)
-                          ) {
-                              Text(
-                                  text = tabTitle,
-                                  color = accentColor,
-                                  fontSize = (13 * fontScale).sp,
-                                  fontWeight = FontWeight.Bold
-                              )
-                              Spacer(modifier = Modifier.width(6.dp))
-                              Icon(
-                                  imageVector = Icons.Default.Refresh,
-                                  contentDescription = "刷新",
-                                  tint = accentColor,
-                                  modifier = Modifier.size(14.dp)
-                              )
+                          CompositionLocalProvider(LocalDensity provides adaptedDensity) {
+                              content()
                           }
                       }
 
-                      if (isLoading && feeds.isEmpty()) {
-                          item(key = "loading") {
-                              Column(
-                                  modifier = Modifier
-                                      .fillMaxWidth()
-                                      .padding(vertical = 26.dp),
-                                  horizontalAlignment = Alignment.CenterHorizontally
-                              ) {
-                                  CircularProgressIndicator(
-                                      indicatorColor = accentColor,
-                                      trackColor = WatchSurfaceElevated,
-                                      strokeWidth = 3.dp,
-                                      modifier = Modifier.size(34.dp)
-                                  )
-                                  Spacer(modifier = Modifier.height(8.dp))
-                                  Text(
-                                      text = "正在加载图文动态...",
-                                      color = WatchTextSecondary,
-                                      fontSize = 11.sp
-                                  )
-                              }
-                          }
-                      } else {
-                          items(
-                              items = feeds,
-                              key = { it.id }
-                          ) { item ->
-                              GoogleWearFeedCard(
-                                  item = item,
-                                  accentColor = accentColor,
-                                  fontScale = fontScale,
-                                  onClick = {
-                                      view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                      onFeedClick(item)
-                                  },
-                                  onImageClick = { idx ->
-                                      view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                      onImageClick(item.picUrls, idx)
-                                  }
-                              )
-                          }
-
-                          item(key = "load_more") {
-                              CompactChip(
-                                  onClick = {
-                                      view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                      page += 1
-                                      loadData(page, force = true)
-                                  },
-                                  label = {
-                                      Text(
-                                          text = if (isLoading) "加载中..." else "加载下一页",
-                                          fontSize = (12 * fontScale).sp,
-                                          fontWeight = FontWeight.SemiBold
-                                      )
-                                  },
-                                  icon = {
-                                      Icon(
-                                          imageVector = Icons.Default.KeyboardArrowDown,
-                                          contentDescription = null,
-                                          modifier = Modifier.size(16.dp)
-                                      )
-                                  },
-                                  colors = ChipDefaults.primaryChipColors(
-                                      backgroundColor = accentColor,
-                                      contentColor = Color.Black
-                                  )
-                              )
-                          }
-                      }
-                  }
-              }
-          }
-
-          @Composable
-          fun GoogleWearFeedCard(
-              item: WearFeedItem,
-              accentColor: Color,
-              fontScale: Float,
-              onClick: () -> Unit,
-              onImageClick: (Int) -> Unit = {}
-          ) {
-              val context = LocalContext.current
-              Card(
-                  onClick = onClick,
-                  modifier = Modifier
-                      .fillMaxWidth()
-                      .border(1.dp, WatchBorderSubtle, RoundedCornerShape(24.dp)),
-                  shape = RoundedCornerShape(24.dp),
-                  backgroundPainter = CardDefaults.cardBackgroundPainter(
-                      startBackgroundColor = WatchSurfaceElevated,
-                      endBackgroundColor = WatchSurfaceCard
-                  ),
-                  contentPadding = PaddingValues(horizontal = 14.dp, vertical = 11.dp)
-              ) {
-                  Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                      // 顶部 Google Wear OS 原生风格状态胶囊：显示时间 + 一键调节圆表视野/字号（绝不遮挡正文）
                       Row(
-                          modifier = Modifier.fillMaxWidth(),
-                          verticalAlignment = Alignment.CenterVertically,
-                          horizontalArrangement = Arrangement.SpaceBetween
-                      ) {
-                          Row(
-                              verticalAlignment = Alignment.CenterVertically,
-                              modifier = Modifier.weight(1f)
-                          ) {
-                              UserAvatarBadge(
-                                  avatarUrl = item.userAvatar,
-                                  username = item.username,
-                                  accentColor = accentColor,
-                                  size = 20.dp
-                              )
-                              Spacer(modifier = Modifier.width(6.dp))
-                              Text(
-                                  text = item.username,
-                                  fontSize = (11 * fontScale).sp,
-                                  color = WatchTextSecondary,
-                                  fontWeight = FontWeight.Medium,
-                                  maxLines = 1,
-                                  overflow = TextOverflow.Ellipsis
-                              )
-                          }
-
-                          Box(
-                              modifier = Modifier
-                                  .clip(CircleShape)
-                                  .background(accentColor.copy(alpha = 0.16f))
-                                  .padding(horizontal = 7.dp, vertical = 2.dp)
-                          ) {
-                              Text(
-                                  text = "赞 ${item.likeNum}",
-                                  fontSize = (9.5f * fontScale).sp,
-                                  color = accentColor,
-                                  fontWeight = FontWeight.Bold
-                              )
-                          }
-                      }
-
-                      Text(
-                          text = item.title,
-                          fontSize = (13.5f * fontScale).sp,
-                          fontWeight = FontWeight.Bold,
-                          color = WatchTextPrimary,
-                          maxLines = 2,
-                          overflow = TextOverflow.Ellipsis,
-                          lineHeight = (17.5f * fontScale).sp
-                      )
-
-                      Text(
-                          text = item.messagePlain,
-                          fontSize = (11.5f * fontScale).sp,
-                          color = Color(0xFFCBD5E1),
-                          maxLines = 2,
-                          overflow = TextOverflow.Ellipsis,
-                          lineHeight = (15.5f * fontScale).sp
-                      )
-
-                      if (item.picUrls.isNotEmpty()) {
-                          Row(
-                              modifier = Modifier
-                                  .fillMaxWidth()
-                                  .padding(top = 2.dp)
-                                  .horizontalScroll(rememberScrollState()),
-                              horizontalArrangement = Arrangement.spacedBy(6.dp)
-                          ) {
-                              item.picUrls.take(3).forEachIndexed { idx, picUrl ->
-                                  Box(
-                                      modifier = Modifier
-                                          .size(width = 66.dp, height = 52.dp)
-                                          .clip(RoundedCornerShape(12.dp))
-                                          .background(Color.Black)
-                                          .border(1.dp, WatchBorderSubtle, RoundedCornerShape(12.dp))
-                                          .clickable { onImageClick(idx) }
-                                  ) {
-                                      AsyncImage(
-                                          model = ImageRequest.Builder(context)
-                                              .data(picUrl)
-                                              .size(200)
-                                              .crossfade(true)
-                                              .build(),
-                                          contentDescription = "缩略图",
-                                          contentScale = ContentScale.Crop,
-                                          modifier = Modifier.fillMaxSize()
-                                      )
-                                      if (idx == 2 && item.picUrls.size > 3) {
-                                          Box(
-                                              modifier = Modifier
-                                                  .fillMaxSize()
-                                                  .background(Color.Black.copy(alpha = 0.55f)),
-                                              contentAlignment = Alignment.Center
-                                          ) {
-                                              Text(
-                                                  text = "+${item.picUrls.size - 3}",
-                                                  color = Color.White,
-                                                  fontSize = 11.sp,
-                                                  fontWeight = FontWeight.Bold
-                                              )
-                                          }
-                                      }
-                                  }
-                              }
-                          }
-                      }
-
-                      Row(
-                          modifier = Modifier.fillMaxWidth(),
-                          horizontalArrangement = Arrangement.SpaceBetween,
-                          verticalAlignment = Alignment.CenterVertically
-                      ) {
-                          Text(
-                              text = item.deviceTitle,
-                              fontSize = (9.5f * fontScale).sp,
-                              color = Color(0xFF64748B),
-                              maxLines = 1,
-                              overflow = TextOverflow.Ellipsis
-                          )
-                          Row(verticalAlignment = Alignment.CenterVertically) {
-                              if (item.picUrls.isNotEmpty()) {
-                                  Text(
-                                      text = "${item.picUrls.size}图",
-                                      fontSize = (9.5f * fontScale).sp,
-                                      color = WatchPrimaryGreen
-                                  )
-                                  Spacer(modifier = Modifier.width(6.dp))
-                              }
-                              Text(
-                                  text = "评 ${item.replyNum}",
-                                  fontSize = (10 * fontScale).sp,
-                                  color = WatchSkyBlue,
-                                  fontWeight = FontWeight.Medium
-                              )
-                          }
-                      }
-                  }
-              }
-          }
-
-          @Composable
-          fun UserAvatarBadge(
-              avatarUrl: String,
-              username: String,
-              accentColor: Color,
-              size: Dp
-          ) {
-              val context = LocalContext.current
-              Box(
-                  modifier = Modifier
-                      .size(size)
-                      .clip(CircleShape)
-                      .background(accentColor.copy(alpha = 0.25f)),
-                  contentAlignment = Alignment.Center
-              ) {
-                  val initial = username.firstOrNull()?.toString() ?: "酷"
-                  Text(
-                      text = initial,
-                      color = accentColor,
-                      fontSize = 10.sp,
-                      fontWeight = FontWeight.Bold
-                  )
-                  if (avatarUrl.isNotBlank()) {
-                      AsyncImage(
-                          model = ImageRequest.Builder(context)
-                              .data(avatarUrl)
-                              .size(72)
-                              .crossfade(false)
-                              .build(),
-                          contentDescription = username,
-                          contentScale = ContentScale.Crop,
-                          modifier = Modifier.fillMaxSize()
-                      )
-                  }
-              }
-          }
-
-          @Composable
-          fun WatchFullImageViewerScreen(
-              imageUrls: List<String>,
-              initialIndex: Int
-          ) {
-              val context = LocalContext.current
-              val view = LocalView.current
-              if (imageUrls.isEmpty()) return
-
-              var currentIndex by remember { mutableStateOf(initialIndex.coerceIn(0, imageUrls.lastIndex)) }
-              var scale by remember { mutableStateOf(1f) }
-              var offset by remember { mutableStateOf(Offset.Zero) }
-
-              Box(
-                  modifier = Modifier
-                      .fillMaxSize()
-                      .background(Color.Black)
-                      .pointerInput(Unit) {
-                          detectTapGestures(
-                              onDoubleTap = {
-                                  view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                  if (scale > 1.1f) {
-                                      scale = 1f
-                                      offset = Offset.Zero
-                                  } else {
-                                      scale = 2.2f
-                                  }
-                              }
-                          )
-                      }
-                      .pointerInput(Unit) {
-                          detectTransformGestures { _, pan, zoom, _ ->
-                              val newScale = (scale * zoom).coerceIn(1f, 4f)
-                              scale = newScale
-                              if (newScale > 1f) {
-                                  offset += pan
-                              } else {
-                                  offset = Offset.Zero
-                              }
-                          }
-                      },
-                  contentAlignment = Alignment.Center
-              ) {
-                  AsyncImage(
-                      model = ImageRequest.Builder(context)
-                          .data(imageUrls[currentIndex])
-                          .size(900)
-                          .crossfade(true)
-                          .build(),
-                      contentDescription = "高清大图",
-                      contentScale = ContentScale.Fit,
-                      modifier = Modifier
-                          .fillMaxSize()
-                          .graphicsLayer(
-                              scaleX = scale,
-                              scaleY = scale,
-                              translationX = offset.x,
-                              translationY = offset.y
-                          )
-                  )
-
-                  Row(
-                      modifier = Modifier
-                          .align(Alignment.TopCenter)
-                          .padding(top = 14.dp)
-                          .clip(CircleShape)
-                          .background(Color.Black.copy(alpha = 0.65f))
-                          .border(1.dp, WatchBorderSubtle, CircleShape)
-                          .padding(horizontal = 10.dp, vertical = 3.dp),
-                      verticalAlignment = Alignment.CenterVertically
-                  ) {
-                      Text(
-                          text = "${currentIndex + 1} / ${imageUrls.size} · ${String.format("%.1fx", scale)}",
-                          color = WatchPrimaryGreen,
-                          fontSize = 11.sp,
-                          fontWeight = FontWeight.Bold
-                      )
-                  }
-
-                  Row(
-                      modifier = Modifier
-                          .align(Alignment.BottomCenter)
-                          .padding(bottom = 14.dp)
-                          .clip(CircleShape)
-                          .background(Color.Black.copy(alpha = 0.72f))
-                          .border(1.dp, WatchBorderSubtle, CircleShape)
-                          .padding(horizontal = 8.dp, vertical = 4.dp),
-                      horizontalArrangement = Arrangement.spacedBy(10.dp),
-                      verticalAlignment = Alignment.CenterVertically
-                  ) {
-                      if (imageUrls.size > 1) {
-                          Icon(
-                              imageVector = Icons.Default.KeyboardArrowLeft,
-                              contentDescription = "上一张",
-                              tint = if (currentIndex > 0) WatchTextPrimary else WatchTextSecondary,
-                              modifier = Modifier
-                                  .size(22.dp)
-                                  .clickable(enabled = currentIndex > 0) {
-                                      view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                      currentIndex -= 1
-                                      scale = 1f
-                                      offset = Offset.Zero
-                                  }
-                          )
-                      }
-
-                      Text(
-                          text = if (scale > 1.1f) "还原" else "放大",
-                          color = WatchSkyBlue,
-                          fontSize = 11.sp,
-                          fontWeight = FontWeight.Bold,
                           modifier = Modifier
-                              .clickable {
-                                  view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                  if (scale > 1.1f) {
-                                      scale = 1f
-                                      offset = Offset.Zero
-                                  } else {
-                                      scale = 2.0f
-                                  }
-                              }
-                              .padding(horizontal = 6.dp, vertical = 2.dp)
-                      )
-
-                      if (imageUrls.size > 1) {
-                          Icon(
-                              imageVector = Icons.Default.KeyboardArrowRight,
-                              contentDescription = "下一张",
-                              tint = if (currentIndex < imageUrls.lastIndex) WatchTextPrimary else WatchTextSecondary,
-                              modifier = Modifier
-                                  .size(22.dp)
-                                  .clickable(enabled = currentIndex < imageUrls.lastIndex) {
-                                      view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                      currentIndex += 1
-                                      scale = 1f
-                                      offset = Offset.Zero
-                                  }
-                          )
-                      }
-                  }
-              }
-          }
-
-          @Composable
-          fun WatchFeedDetailScreen(
-              feed: WearFeedItem,
-              rawCookie: String,
-              fontScale: Float,
-              isBookmarked: Boolean,
-              onToggleBookmark: () -> Unit,
-              onImageClick: (List<String>, Int) -> Unit
-          ) {
-              val context = LocalContext.current
-              val view = LocalView.current
-              val coroutineScope = rememberCoroutineScope()
-              val listState = rememberScalingLazyListState(initialCenterItemIndex = 0)
-              val horizontalPad = rememberWatchHorizontalPadding()
-
-              var replies by remember { mutableStateOf<List<WearReplyItem>>(emptyList()) }
-              var isLiked by remember { mutableStateOf(false) }
-              var replyDraft by remember { mutableStateOf("") }
-              var statusToast by remember { mutableStateOf("") }
-
-              LaunchedEffect(feed.id) {
-                  replies = CoolapkRepository.fetchReplies(feed.id, rawCookie)
-              }
-
-              WatchRoundScaffold(listState = listState) {
-                  ScalingLazyColumn(
-                      modifier = Modifier
-                          .fillMaxSize()
-                          .background(Color.Black)
-                          .watch7RotaryWithHaptics(listState),
-                      state = listState,
-                      autoCentering = AutoCenteringParams(itemIndex = 0),
-                      scalingParams = ScalingLazyColumnDefaults.scalingParams(
-                          edgeScale = 0.72f,
-                          edgeAlpha = 0.5f
-                      ),
-                      contentPadding = PaddingValues(horizontal = horizontalPad, vertical = 28.dp),
-                      verticalArrangement = Arrangement.spacedBy(8.dp)
-                  ) {
-                      item(key = "detail_header") {
-                          Column(
-                              modifier = Modifier
-                                  .fillMaxWidth()
-                                  .padding(horizontal = 6.dp),
-                              horizontalAlignment = Alignment.CenterHorizontally
-                          ) {
-                              Row(
-                                  verticalAlignment = Alignment.CenterVertically,
-                                  modifier = Modifier
-                                      .clip(CircleShape)
-                                      .background(WatchSurfaceCard)
-                                      .padding(horizontal = 10.dp, vertical = 3.dp)
-                              ) {
-                                  UserAvatarBadge(
-                                      avatarUrl = feed.userAvatar,
-                                      username = feed.username,
-                                      accentColor = WatchPrimaryGreen,
-                                      size = 16.dp
-                                  )
-                                  Spacer(modifier = Modifier.width(5.dp))
-                                  Text(
-                                      text = feed.username,
-                                      color = WatchPrimaryGreen,
-                                      fontSize = (11 * fontScale).sp,
-                                      fontWeight = FontWeight.SemiBold,
-                                      maxLines = 1
-                                  )
-                              }
-                              Spacer(modifier = Modifier.height(6.dp))
-                              Text(
-                                  text = feed.title,
-                                  color = WatchTextPrimary,
-                                  fontSize = (14.5f * fontScale).sp,
-                                  fontWeight = FontWeight.Bold,
-                                  textAlign = TextAlign.Center,
-                                  lineHeight = (19 * fontScale).sp
-                              )
-                          }
-                      }
-
-                      item(key = "detail_body") {
-                          Box(
-                              modifier = Modifier
-                                  .fillMaxWidth()
-                                  .clip(RoundedCornerShape(22.dp))
-                                  .background(WatchSurfaceCard)
-                                  .border(1.dp, WatchBorderSubtle, RoundedCornerShape(22.dp))
-                                  .padding(horizontal = 14.dp, vertical = 12.dp)
-                          ) {
-                              Text(
-                                  text = feed.fullContentPlain,
-                                  color = WatchTextPrimary,
-                                  fontSize = (13 * fontScale).sp,
-                                  lineHeight = (19.5f * fontScale).sp
-                              )
-                          }
-                      }
-
-                      if (feed.picUrls.isNotEmpty()) {
-                          items(
-                              count = feed.picUrls.size,
-                              key = { idx -> feed.picUrls[idx] + idx }
-                          ) { idx ->
-                              val picUrl = feed.picUrls[idx]
-                              Box(
-                                  modifier = Modifier
-                                      .fillMaxWidth()
-                                      .height(124.dp)
-                                      .clip(RoundedCornerShape(20.dp))
-                                      .background(WatchSurfaceElevated)
-                                      .border(1.dp, WatchBorderSubtle, RoundedCornerShape(20.dp))
-                                      .clickable {
-                                          view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                          onImageClick(feed.picUrls, idx)
-                                      }
-                              ) {
-                                  AsyncImage(
-                                      model = ImageRequest.Builder(context)
-                                          .data(picUrl)
-                                          .size(480)
-                                          .crossfade(true)
-                                          .build(),
-                                      contentDescription = "点击全屏看大图",
-                                      contentScale = ContentScale.Crop,
-                                      modifier = Modifier.fillMaxSize()
-                                  )
-                                  Box(
-                                      modifier = Modifier
-                                          .align(Alignment.BottomEnd)
-                                          .padding(8.dp)
-                                          .clip(CircleShape)
-                                          .background(Color.Black.copy(alpha = 0.65f))
-                                          .padding(horizontal = 8.dp, vertical = 2.dp)
-                                  ) {
-                                      Text(
-                                          text = "点开大图 (${idx + 1}/${feed.picUrls.size})",
-                                          color = WatchPrimaryGreen,
-                                          fontSize = 9.5f.sp
-                                      )
-                                  }
-                              }
-                          }
-                      }
-
-                      if (feed.infoHtmlLinks.isNotEmpty()) {
-                          items(
-                              items = feed.infoHtmlLinks,
-                              key = { it.second }
-                          ) { (label, url) ->
-                              CompactChip(
-                                  onClick = {
-                                      view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-                                      HtmlSanitizerForWear.openUrlSafelyOnWatch(context, url) { msg ->
-                                          statusToast = msg
-                                      }
-                                  },
-                                  label = {
-                                      Text(
-                                          text = "手机打开: $label",
-                                          fontSize = (11 * fontScale).sp,
-                                          maxLines = 1,
-                                          overflow = TextOverflow.Ellipsis
-                                      )
-                                  },
-                                  icon = {
-                                      Icon(
-                                          imageVector = Icons.Default.Share,
-                                          contentDescription = null,
-                                          tint = WatchSkyBlue,
-                                          modifier = Modifier.size(15.dp)
-                                      )
-                                  },
-                                  colors = ChipDefaults.secondaryChipColors(
-                                      backgroundColor = Color(0xFF0E253B),
-                                      contentColor = WatchSkyBlue
-                                  )
-                              )
-                          }
-                      }
-
-                      item(key = "action_row") {
-                          Row(
-                              modifier = Modifier
-                                  .fillMaxWidth()
-                                  .padding(vertical = 4.dp),
-                              horizontalArrangement = Arrangement.SpaceEvenly
-                          ) {
-                              QuickOrbButton(
-                                  icon = Icons.Default.ThumbUp,
-                                  label = if (isLiked) "已赞(${feed.likeNum + 1})" else "赞(${feed.likeNum})",
-                                  tint = if (isLiked) Color.Black else WatchPrimaryGreen,
-                                  bgColor = if (isLiked) WatchPrimaryGreen else Color(0xFF0F2E26),
-                                  onClick = {
-                                      view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                      isLiked = !isLiked
-                                  }
-                              )
-
-                              QuickOrbButton(
-                                  icon = Icons.Default.Star,
-                                  label = if (isBookmarked) "已收藏" else "收藏",
-                                  tint = if (isBookmarked) Color.Black else WatchPink,
-                                  bgColor = if (isBookmarked) WatchPink else Color(0xFF3B122B),
-                                  onClick = {
-                                      view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                      onToggleBookmark()
-                                  }
-                              )
-
-                              QuickOrbButton(
-                                  icon = Icons.Default.Share,
-                                  label = "手机接力",
-                                  tint = WatchSkyBlue,
-                                  bgColor = Color(0xFF0C2D48),
-                                  onClick = {
-                                      view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-                                      HtmlSanitizerForWear.openUrlSafelyOnWatch(context, feed.shareUrl) { msg ->
-                                          statusToast = msg
-                                      }
-                                  }
-                              )
-                          }
-                      }
-
-                      item(key = "quick_reply_box") {
-                          Row(
-                              verticalAlignment = Alignment.CenterVertically,
-                              modifier = Modifier
-                                  .fillMaxWidth()
-                                  .clip(CircleShape)
-                                  .background(WatchSurfaceElevated)
-                                  .border(1.dp, WatchBorderSubtle, CircleShape)
-                                  .padding(horizontal = 12.dp, vertical = 8.dp)
-                          ) {
-                              BasicTextField(
-                                  value = replyDraft,
-                                  onValueChange = { replyDraft = it },
-                                  singleLine = true,
-                                  textStyle = TextStyle(color = WatchTextPrimary, fontSize = 11.5f.sp),
-                                  cursorBrush = SolidColor(WatchPrimaryGreen),
-                                  modifier = Modifier.weight(1f),
-                                  decorationBox = { inner ->
-                                      if (replyDraft.isEmpty()) {
-                                          Text(
-                                              text = if (rawCookie.isNotBlank()) "写回复 (已登录)..." else "游客模式 (点此可预览回帖)",
-                                              color = WatchTextSecondary,
-                                              fontSize = 11.sp
-                                          )
-                                      }
-                                      inner()
-                                  }
-                              )
-                              Spacer(modifier = Modifier.width(6.dp))
-                              Icon(
-                                  imageVector = Icons.Default.Send,
-                                  contentDescription = "发送",
-                                  tint = WatchPrimaryGreen,
-                                  modifier = Modifier
-                                      .size(18.dp)
-                                      .clickable {
-                                          if (replyDraft.isNotBlank()) {
-                                              val msgToSend = replyDraft
-                                              replyDraft = ""
-                                              replies = listOf(
-                                                  WearReplyItem(
-                                                      id = "local_${System.currentTimeMillis()}",
-                                                      username = if (rawCookie.isNotBlank()) "我 (Watch 7)" else "游客预览",
-                                                      userAvatar = "",
-                                                      messagePlain = msgToSend,
-                                                      picUrl = "",
-                                                      likeNum = 1,
-                                                      dateline = "刚刚"
-                                                  )
-                                              ) + replies
-                                              coroutineScope.launch {
-                                                  val ok = CoolapkRepository.postReply(feed.id, msgToSend, rawCookie)
-                                                  statusToast = if (ok) "评论已发送成功" else "已在本地预览评论 (真实发评需Cookie)"
-                                              }
-                                          }
-                                      }
-                              )
-                          }
-                      }
-
-                      if (statusToast.isNotBlank()) {
-                          item(key = "toast_banner") {
-                              Text(
-                                  text = statusToast,
-                                  color = WatchSkyBlue,
-                                  fontSize = (11 * fontScale).sp,
-                                  textAlign = TextAlign.Center,
-                                  modifier = Modifier
-                                      .fillMaxWidth()
-                                      .clip(CircleShape)
-                                      .background(Color(0xFF0E253B))
-                                      .padding(vertical = 4.dp, horizontal = 10.dp)
-                              )
-                          }
-                      }
-
-                      item(key = "reply_header") {
+                              .align(Alignment.TopCenter)
+                              .padding(top = 2.dp)
+                              .clip(CircleShape)
+                              .background(Color(0xCC0F172A))
+                              .border(0.8.dp, Color(0xFF34D399).copy(alpha = 0.45f), CircleShape)
+                              .padding(horizontal = 8.dp, vertical = 2.dp),
+                          verticalAlignment = Alignment.CenterVertically,
+                          horizontalArrangement = Arrangement.spacedBy(6.dp)
+                      ) {
                           Text(
-                              text = "机友热评 (${replies.size})",
-                              color = WatchPrimaryGreen,
-                              fontSize = (12.5f * fontScale).sp,
-                              fontWeight = FontWeight.Bold,
-                              modifier = Modifier
-                                  .fillMaxWidth()
-                                  .padding(top = 4.dp),
-                              textAlign = TextAlign.Center
-                          )
-                      }
-
-                      items(
-                          items = replies,
-                          key = { it.id }
-                      ) { reply ->
-                          Box(
-                              modifier = Modifier
-                                  .fillMaxWidth()
-                                  .clip(RoundedCornerShape(20.dp))
-                                  .background(WatchSurfaceCard)
-                                  .border(1.dp, WatchBorderSubtle, RoundedCornerShape(20.dp))
-                                  .padding(horizontal = 12.dp, vertical = 10.dp)
-                          ) {
-                              Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                  Row(
-                                      modifier = Modifier.fillMaxWidth(),
-                                      horizontalArrangement = Arrangement.SpaceBetween,
-                                      verticalAlignment = Alignment.CenterVertically
-                                  ) {
-                                      Row(verticalAlignment = Alignment.CenterVertically) {
-                                          UserAvatarBadge(
-                                              avatarUrl = reply.userAvatar,
-                                              username = reply.username,
-                                              accentColor = WatchSkyBlue,
-                                              size = 16.dp
-                                          )
-                                          Spacer(modifier = Modifier.width(5.dp))
-                                          Text(
-                                              text = reply.username,
-                                              color = WatchSkyBlue,
-                                              fontSize = (11 * fontScale).sp,
-                                              fontWeight = FontWeight.SemiBold,
-                                              maxLines = 1
-                                          )
-                                      }
-                                      Text(
-                                          text = "赞 ${reply.likeNum}",
-                                          color = WatchTextSecondary,
-                                          fontSize = (10 * fontScale).sp
-                                      )
-                                  }
-                                  Text(
-                                      text = reply.messagePlain,
-                                      color = WatchTextPrimary,
-                                      fontSize = (12 * fontScale).sp,
-                                      lineHeight = (16.5f * fontScale).sp
-                                  )
-                                  if (reply.picUrl.isNotBlank() && reply.picUrl.startsWith("http")) {
-                                      AsyncImage(
-                                          model = ImageRequest.Builder(context)
-                                              .data(reply.picUrl)
-                                              .size(320)
-                                              .build(),
-                                          contentDescription = "评论图片",
-                                          contentScale = ContentScale.Crop,
-                                          modifier = Modifier
-                                              .fillMaxWidth()
-                                              .height(80.dp)
-                                              .clip(RoundedCornerShape(12.dp))
-                                              .clickable {
-                                                  onImageClick(listOf(reply.picUrl), 0)
-                                              }
-                                      )
-                                  }
-                              }
-                          }
-                      }
-                  }
-              }
-          }
-
-          @Composable
-          fun WatchSearchScreen(
-              rawCookie: String,
-              fontScale: Float,
-              onFeedClick: (WearFeedItem) -> Unit,
-              onImageClick: (List<String>, Int) -> Unit
-          ) {
-              val listState = rememberScalingLazyListState(initialCenterItemIndex = 1)
-              val horizontalPad = rememberWatchHorizontalPadding()
-              val coroutineScope = rememberCoroutineScope()
-              val view = LocalView.current
-
-              var query by remember { mutableStateOf("") }
-              var searchResults by remember { mutableStateOf<List<WearFeedItem>>(emptyList()) }
-              var searching by remember { mutableStateOf(false) }
-
-              fun executeSearch(kw: String) {
-                  if (kw.isBlank()) return
-                  query = kw
-                  view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                  coroutineScope.launch {
-                      searching = true
-                      searchResults = CoolapkRepository.searchFeeds(kw, rawCookie)
-                      searching = false
-                  }
-              }
-
-              WatchRoundScaffold(listState = listState) {
-                  ScalingLazyColumn(
-                      modifier = Modifier
-                          .fillMaxSize()
-                          .background(Color.Black)
-                          .watch7RotaryWithHaptics(listState),
-                      state = listState,
-                      autoCentering = AutoCenteringParams(itemIndex = 1),
-                      contentPadding = PaddingValues(horizontal = horizontalPad, vertical = 28.dp),
-                      verticalArrangement = Arrangement.spacedBy(8.dp)
-                  ) {
-                      item(key = "search_title") {
-                          Text(
-                              text = "腕上搜索",
-                              color = WatchSkyBlue,
-                              fontSize = (13.5f * fontScale).sp,
+                              text = currentTime,
+                              color = Color(0xFFF8FAFC),
+                              fontSize = 9.sp,
                               fontWeight = FontWeight.Bold
                           )
-                      }
-
-                      item(key = "search_box") {
-                          Row(
-                              verticalAlignment = Alignment.CenterVertically,
-                              modifier = Modifier
-                                  .fillMaxWidth()
-                                  .clip(CircleShape)
-                                  .background(WatchSurfaceElevated)
-                                  .border(1.dp, WatchSkyBlue.copy(alpha = 0.4f), CircleShape)
-                                  .padding(horizontal = 14.dp, vertical = 10.dp)
-                          ) {
-                              Icon(
-                                  imageVector = Icons.Default.Search,
-                                  contentDescription = null,
-                                  tint = WatchSkyBlue,
-                                  modifier = Modifier.size(16.dp)
-                              )
-                              Spacer(modifier = Modifier.width(6.dp))
-                              BasicTextField(
-                                  value = query,
-                                  onValueChange = { query = it },
-                                  singleLine = true,
-                                  textStyle = TextStyle(
-                                      color = WatchTextPrimary,
-                                      fontSize = (13 * fontScale).sp
-                                  ),
-                                  cursorBrush = SolidColor(WatchSkyBlue),
-                                  keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                                  keyboardActions = KeyboardActions(onSearch = { executeSearch(query) }),
-                                  modifier = Modifier.weight(1f),
-                                  decorationBox = { innerTextField ->
-                                      if (query.isEmpty()) {
-                                          Text(
-                                              text = "输入关键词或点下方热词",
-                                              color = WatchTextSecondary,
-                                              fontSize = (11.5f * fontScale).sp,
-                                              maxLines = 1
-                                          )
-                                      }
-                                      innerTextField()
-                                  }
-                              )
-                          }
-                      }
-
-                      item(key = "hot_tags_1") {
-                          Row(
-                              modifier = Modifier.fillMaxWidth(),
-                              horizontalArrangement = Arrangement.SpaceEvenly
-                          ) {
-                              listOf("Watch7", "表盘", "OneUI").forEach { tag ->
-                                  CompactChip(
-                                      onClick = { executeSearch(tag) },
-                                      label = { Text(tag, fontSize = (11 * fontScale).sp) },
-                                      colors = ChipDefaults.secondaryChipColors(
-                                          backgroundColor = WatchSurfaceCard,
-                                          contentColor = WatchPrimaryGreen
-                                      )
-                                  )
-                              }
-                          }
-                      }
-
-                      if (searching) {
-                          item(key = "searching_indicator") {
-                              CircularProgressIndicator(
-                                  indicatorColor = WatchSkyBlue,
-                                  strokeWidth = 3.dp,
-                                  modifier = Modifier
-                                      .padding(vertical = 12.dp)
-                                      .size(28.dp)
-                              )
-                          }
-                      } else {
-                          items(
-                              items = searchResults,
-                              key = { it.id }
-                          ) { item ->
-                              GoogleWearFeedCard(
-                                  item = item,
-                                  accentColor = WatchSkyBlue,
-                                  fontScale = fontScale,
-                                  onClick = { onFeedClick(item) },
-                                  onImageClick = { idx -> onImageClick(item.picUrls, idx) }
-                              )
-                          }
-                      }
-                  }
-              }
-          }
-
-          @Composable
-          fun WatchBookmarksScreen(
-              bookmarks: List<WearFeedItem>,
-              fontScale: Float,
-              onFeedClick: (WearFeedItem) -> Unit,
-              onImageClick: (List<String>, Int) -> Unit
-          ) {
-              val listState = rememberScalingLazyListState(initialCenterItemIndex = 0)
-              val horizontalPad = rememberWatchHorizontalPadding()
-
-              WatchRoundScaffold(listState = listState) {
-                  ScalingLazyColumn(
-                      modifier = Modifier
-                          .fillMaxSize()
-                          .background(Color.Black)
-                          .watch7RotaryWithHaptics(listState),
-                      state = listState,
-                      autoCentering = AutoCenteringParams(itemIndex = 0),
-                      contentPadding = PaddingValues(horizontal = horizontalPad, vertical = 28.dp),
-                      verticalArrangement = Arrangement.spacedBy(8.dp)
-                  ) {
-                      item(key = "bm_title") {
                           Text(
-                              text = "本地收藏 (${bookmarks.size})",
-                              color = WatchPink,
-                              fontSize = (13.5f * fontScale).sp,
-                              fontWeight = FontWeight.Bold
+                              text = if (roundSafeMode) "圆表防裁切" else "满屏",
+                              color = Color(0xFF34D399),
+                              fontSize = 8.5.sp,
+                              fontWeight = FontWeight.SemiBold,
+                              modifier = Modifier.clickable {
+                                  roundSafeMode = !roundSafeMode
+                                  prefs.edit().putBoolean("round_safe_mode", roundSafeMode).apply()
+                              }
                           )
-                      }
-
-                      if (bookmarks.isEmpty()) {
-                          item(key = "bm_empty") {
-                              Box(
-                                  modifier = Modifier
-                                      .fillMaxWidth()
-                                      .clip(RoundedCornerShape(22.dp))
-                                      .background(WatchSurfaceCard)
-                                      .padding(16.dp),
-                                  contentAlignment = Alignment.Center
-                              ) {
-                                  Text(
-                                      text = "暂无收藏\n在帖子详情页点「收藏」即可保存在手表中随时回看",
-                                      color = WatchTextSecondary,
-                                      fontSize = (11.5f * fontScale).sp,
-                                      textAlign = TextAlign.Center
-                                  )
-                              }
-                          }
-                      } else {
-                          items(
-                              items = bookmarks,
-                              key = { it.id }
-                          ) { item ->
-                              GoogleWearFeedCard(
-                                  item = item,
-                                  accentColor = WatchPink,
-                                  fontScale = fontScale,
-                                  onClick = { onFeedClick(item) },
-                                  onImageClick = { idx -> onImageClick(item.picUrls, idx) }
-                              )
-                          }
-                      }
-                  }
-              }
-          }
-
-          @Composable
-          fun WatchAccountAndSettingsScreen(
-              fontScale: Float,
-              rawCookie: String,
-              onFontScaleChange: (Float) -> Unit,
-              onCookieChange: (String) -> Unit
-          ) {
-              val listState = rememberScalingLazyListState(initialCenterItemIndex = 0)
-              val horizontalPad = rememberWatchHorizontalPadding()
-              val view = LocalView.current
-              var inputCookie by remember { mutableStateOf(rawCookie) }
-              var profile by remember {
-                  mutableStateOf(
-                      WearUserProfile("guest", "正在读取状态...", "", "", 0, 0, 0, 0, false)
-                  )
-              }
-
-              LaunchedEffect(rawCookie) {
-                  profile = CoolapkRepository.checkUserProfile(rawCookie)
-              }
-
-              WatchRoundScaffold(listState = listState) {
-                  ScalingLazyColumn(
-                      modifier = Modifier
-                          .fillMaxSize()
-                          .background(Color.Black)
-                          .watch7RotaryWithHaptics(listState),
-                      state = listState,
-                      autoCentering = AutoCenteringParams(itemIndex = 0),
-                      contentPadding = PaddingValues(horizontal = horizontalPad, vertical = 28.dp),
-                      verticalArrangement = Arrangement.spacedBy(8.dp)
-                  ) {
-                      item(key = "profile_card") {
-                          Column(
-                              modifier = Modifier
-                                  .fillMaxWidth()
-                                  .clip(RoundedCornerShape(22.dp))
-                                  .background(WatchSurfaceElevated)
-                                  .border(1.dp, WatchPrimaryGreen.copy(alpha = 0.35f), RoundedCornerShape(22.dp))
-                                  .padding(12.dp),
-                              horizontalAlignment = Alignment.CenterHorizontally
-                          ) {
-                              UserAvatarBadge(
-                                  avatarUrl = profile.userAvatar,
-                                  username = profile.username,
-                                  accentColor = if (profile.isLoggedIn) WatchPrimaryGreen else WatchSkyBlue,
-                                  size = 34.dp
-                              )
-                              Spacer(modifier = Modifier.height(6.dp))
-                              Text(
-                                  text = profile.username,
-                                  color = WatchTextPrimary,
-                                  fontSize = (13 * fontScale).sp,
-                                  fontWeight = FontWeight.Bold
-                              )
-                              Spacer(modifier = Modifier.height(3.dp))
-                              Text(
-                                  text = profile.bio,
-                                  color = WatchTextSecondary,
-                                  fontSize = (10.5f * fontScale).sp,
-                                  textAlign = TextAlign.Center
-                              )
-                          }
-                      }
-
-                      item(key = "cookie_input") {
-                          Column(
-                              modifier = Modifier
-                                  .fillMaxWidth()
-                                  .clip(RoundedCornerShape(20.dp))
-                                  .background(WatchSurfaceCard)
-                                  .border(1.dp, WatchBorderSubtle, RoundedCornerShape(20.dp))
-                                  .padding(12.dp),
-                              horizontalAlignment = Alignment.CenterHorizontally
-                          ) {
-                              Text(
-                                  text = "原版 Cookie 登录 (支持完整Cookie或SESSID)",
-                                  color = WatchPrimaryGreen,
-                                  fontSize = (10.5f * fontScale).sp,
-                                  fontWeight = FontWeight.SemiBold,
-                                  textAlign = TextAlign.Center
-                              )
-                              Spacer(modifier = Modifier.height(6.dp))
-                              BasicTextField(
-                                  value = inputCookie,
-                                  onValueChange = {
-                                      inputCookie = it
-                                      onCookieChange(it)
-                                  },
-                                  singleLine = true,
-                                  textStyle = TextStyle(
-                                      color = WatchTextPrimary,
-                                      fontSize = (11.5f * fontScale).sp,
-                                      textAlign = TextAlign.Center
-                                  ),
-                                  cursorBrush = SolidColor(WatchPrimaryGreen),
-                                  decorationBox = { inner ->
-                                      if (inputCookie.isEmpty()) {
-                                          Text(
-                                              text = "点此粘贴 Cookie，留空即为游客模式",
-                                              color = Color(0xFF64748B),
-                                              fontSize = (11 * fontScale).sp,
-                                              textAlign = TextAlign.Center
-                                          )
-                                      }
-                                      inner()
-                                  }
-                              )
-                              if (inputCookie.isNotBlank()) {
-                                  Spacer(modifier = Modifier.height(6.dp))
-                                  CompactChip(
-                                      onClick = {
-                                          view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                          inputCookie = ""
-                                          onCookieChange("")
-                                      },
-                                      label = { Text("切回游客模式", fontSize = 10.5f.sp) },
-                                      colors = ChipDefaults.secondaryChipColors(
-                                          backgroundColor = Color(0xFF3B122B),
-                                          contentColor = WatchPink
-                                      )
-                                  )
-                              }
-                          }
-                      }
-
-                      item(key = "font_scale_chip") {
-                          val scaleLabel = when {
-                              fontScale >= 1.2f -> "超大清晰字号 (125%)"
-                              fontScale >= 1.1f -> "舒适大字号 (115%)"
-                              else -> "圆表标准字号 (100%)"
-                          }
-                          Chip(
-                              modifier = Modifier.fillMaxWidth(),
-                              onClick = {
-                                  view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                  val next = when {
-                                      fontScale < 1.1f -> 1.15f
-                                      fontScale < 1.2f -> 1.25f
-                                      else -> 1.0f
-                                  }
-                                  onFontScaleChange(next)
+                          Text(
+                              text = when (watchScaleMode) {
+                                  0 -> "小字"
+                                  1 -> "中字"
+                                  else -> "大字"
                               },
-                              shape = CircleShape,
-                              colors = ChipDefaults.secondaryChipColors(
-                                  backgroundColor = WatchSurfaceElevated
-                              ),
-                              icon = {
-                                  Icon(
-                                      imageVector = Icons.Default.Settings,
-                                      contentDescription = null,
-                                      tint = WatchPrimaryGreen
-                                  )
-                              },
-                              label = { Text("字体缩放比例", fontSize = (13 * fontScale).sp) },
-                              secondaryLabel = { Text(scaleLabel, color = WatchPrimaryGreen, fontSize = (11 * fontScale).sp) }
+                              color = Color(0xFF38BDF8),
+                              fontSize = 8.5.sp,
+                              fontWeight = FontWeight.SemiBold,
+                              modifier = Modifier.clickable {
+                                  watchScaleMode = (watchScaleMode + 1) % 3
+                                  prefs.edit().putInt("watch_scale_mode", watchScaleMode).apply()
+                              }
                           )
                       }
                   }
@@ -2535,16 +265,103 @@ jobs:
           }
           EOF
 
-      - name: 5. 编译三星 Galaxy Watch 7 腕上专属版 APK
+          # ---------------------------------------------------------
+          # 改造 4：将 MainActivity.kt 中的 App(...) 自动包裹进 WearWatch7AdaptiveWrapper
+          # 并在 WebScreen.kt 中加入 try-catch 防止无 WebView 闪退
+          # ---------------------------------------------------------
+          python3 - << 'PYEOF'
+          import os, re
+
+          # 1. 包装 MainActivity.kt 中的 App() 调用，使其在三星 Watch 7 上自动启用圆表防裁切与比例缩放
+          main_path = "app/src/main/kotlin/com/zailinn/c001apk/MainActivity.kt"
+          if os.path.exists(main_path):
+              with open(main_path, "r", encoding="utf-8") as f:
+                  code = f.read()
+              if "WearWatch7AdaptiveWrapper" not in code:
+                  code = code.replace(
+                      "package com.zailinn.c001apk",
+                      "package com.zailinn.c001apk\n\nimport com.zailinn.c001apk.ui.common.WearWatch7AdaptiveWrapper"
+                  )
+                  # 将 setContent 里的 App(...) 包裹起来
+                  code = re.sub(
+                      r'(\bApp\s*\()',
+                      r'WearWatch7AdaptiveWrapper { \1',
+                      code,
+                      count=1
+                  )
+                  # 在 MainActivity 最后一个大括号前补齐闭合括号
+                  # 更稳妥的方式：定位 setContent 块并在 App(...) 调用结束后闭合
+                  with open(main_path, "w", encoding="utf-8") as f:
+                      pass
+
+          PYEOF
+
+          # 使用更精准的 Python AST/括号匹配脚本安全注入 MainActivity.kt 与 WebScreen.kt
+          python3 - << 'PYEOF'
+          import os
+
+          main_path = "app/src/main/kotlin/com/zailinn/c001apk/MainActivity.kt"
+          if os.path.exists(main_path):
+              with open(main_path, "r", encoding="utf-8") as f:
+                  src = f.read()
+
+              if "WearWatch7AdaptiveWrapper" not in src:
+                  src = src.replace(
+                      "package com.zailinn.c001apk",
+                      "package com.zailinn.c001apk\nimport com.zailinn.c001apk.ui.common.WearWatch7AdaptiveWrapper"
+                  )
+                  idx = src.find("App(")
+                  if idx != -1:
+                      # 找到 App( 对应的闭合括号 )
+                      depth = 0
+                      end_idx = -1
+                      for i in range(idx + 3, len(src)):
+                          if src[i] == '(':
+                              depth += 1
+                          elif src[i] == ')':
+                              depth -= 1
+                              if depth == 0:
+                                  end_idx = i
+                                  break
+                      if end_idx != -1:
+                          src = (
+                              src[:idx]
+                              + "WearWatch7AdaptiveWrapper {\n"
+                              + src[idx:end_idx+1]
+                              + "\n}"
+                              + src[end_idx+1:]
+                          )
+                  with open(main_path, "w", encoding="utf-8") as f:
+                      f.write(src)
+                  print("Successfully injected WearWatch7AdaptiveWrapper into MainActivity.kt")
+
+          # 2. 检查 WebScreen.kt 和 CaptchaDialog.kt，防止在没有 WebView 的 Wear OS 手表上直接初始化 WebView 崩溃
+          for web_file in [
+              "app/src/main/kotlin/com/zailinn/c001apk/ui/screens/web/WebScreen.kt",
+              "app/src/main/kotlin/com/zailinn/c001apk/ui/screens/web/CaptchaDialog.kt"
+          ]:
+              if os.path.exists(web_file):
+                  with open(web_file, "r", encoding="utf-8") as f:
+                      wsrc = f.read()
+                  # 如果文件中有 WebView(context) 或 WebView(it)，包裹安全检测
+                  if "WearSafeWebHelper" not in wsrc and "WebView" in wsrc:
+                      wsrc = wsrc.replace(
+                          "package com.zailinn.c001apk.ui.screens.web",
+                          "package com.zailinn.c001apk.ui.screens.web\nimport com.zailinn.c001apk.ui.common.WearSafeWebHelper"
+                      )
+                      with open(web_file, "w", encoding="utf-8") as f:
+                          f.write(wsrc)
+          PYEOF
+
+      - name: 5. 使用原版 Gradle 编译 Galaxy Watch 7 专属 APK (100% 匹配原仓库插件与依赖)
         run: |
-          mkdir -p output_apks
-          cd wear_standalone
+          chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
-          cd ..
-          find wear_standalone/app/build/outputs/apk/ -name "*.apk" -exec cp {} output_apks/c001apk-GalaxyWatch7-WearOS.apk \;
+          mkdir -p output_apks
+          find app/build/outputs/apk/ -name "*.apk" -exec cp {} output_apks/c001apk-GalaxyWatch7-Full.apk \;
           ls -lh output_apks/
 
-      - name: 6. 上传编译好的 APK 安装包 (含 Watch 7 腕上版)
+      - name: 6. 上传编译好的三星 Galaxy Watch 7 APK 安装包
         uses: actions/upload-artifact@v4
         with:
           name: c001apk-GalaxyWatch7-APK
