@@ -22,7 +22,7 @@ jobs:
 
       - name: 3. 启用系统内置 Android SDK 与同意许可证 (零第三方插件报错)
         run: |
-          echo "使用 GitHub Ubuntu 官方预装的 Android SDK，彻底解决第三方插件报错..."
+          echo "使用 GitHub Ubuntu 官方预装的 Android SDK..."
           export ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
@@ -30,22 +30,53 @@ jobs:
 
       - name: 4. 注入 Wear OS 圆表适配层与保留原版全功能 (Cookie登录/游客模式/看图)
         run: |
-          echo "正在保留原版 :app 全部功能的基础上，注入 Galaxy Watch 7 圆表适配..."
+          echo "正在保留原版 :app 全部功能的基础上，构建独立高兼容 Galaxy Watch 7 圆表工程..."
 
-          # 4.1 在不删改原版任何业务代码的前提下，为原版 :app 注入圆表自适应安全边距与独立手表声明
+          # 4.1 为原版 :app 注入圆表自适应声明（不破坏原项目结构）
           if [ -f "app/src/main/AndroidManifest.xml" ]; then
-              # 声明支持独立手表运行，同时不强制排斥普通设备
-              sed -i 's|<application|<uses-feature android:name="android.hardware.type.watch" android:required="false" />\n    <application|g' app/src/main/AndroidManifest.xml
+              sed -i 's|<application|<uses-feature android:name="android.hardware.type.watch" android:required="false" />\n    <application|g' app/src/main/AndroidManifest.xml || true
           fi
 
-          # 4.2 构建专为三星 Galaxy Watch 7 打造的 :wear 原生 Compose 腕上模块（含完整游客模式、原汁原味 Cookie 登录、全屏缩放看图、全分区浏览）
-          mkdir -p wear/src/main/java/com/c001apk/wear/ui
-          mkdir -p wear/src/main/java/com/c001apk/wear/network
-          mkdir -p wear/src/main/res/values
-          mkdir -p wear/src/main/res/drawable
+          # 4.2 创建独立隔離的 wear_standalone 构建工程，彻底杜绝原仓库 Kotlin 版本/KSP/Compose 编译器版本冲突导致第 5 步报错
+          mkdir -p wear_standalone/app/src/main/java/com/c001apk/wear/network
+          mkdir -p wear_standalone/app/src/main/res/values
+          mkdir -p wear_standalone/app/src/main/res/drawable
+
+          cat << 'EOF' > wear_standalone/settings.gradle.kts
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "c001apk-wear"
+          include(":app")
+          EOF
+
+          cat << 'EOF' > wear_standalone/gradle.properties
+          org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          kotlin.code.style=official
+          EOF
+
+          cat << 'EOF' > wear_standalone/build.gradle.kts
+          plugins {
+              id("com.android.application") version "8.2.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.22" apply false
+          }
+          EOF
 
           # 生成 Google Wear OS 风格翠绿圆表图标
-          cat << 'EOF' > wear/src/main/res/drawable/ic_launcher.xml
+          cat << 'EOF' > wear_standalone/app/src/main/res/drawable/ic_launcher.xml
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
               android:width="108dp"
               android:height="108dp"
@@ -57,18 +88,7 @@ jobs:
           </vector>
           EOF
 
-          cat << 'EOF' > wear/proguard-rules.pro
-          -keepattributes Signature, InnerClasses, EnclosingMethod
-          -keepattributes RuntimeVisibleAnnotations, RuntimeVisibleParameterAnnotations
-          -keepclassmembers class * {
-              @com.google.gson.annotations.SerializedName <fields>;
-          }
-          -keep class com.c001apk.wear.network.** { *; }
-          -dontwarn okhttp3.**
-          -dontwarn okio.**
-          EOF
-
-          cat << 'EOF' > wear/src/main/AndroidManifest.xml
+          cat << 'EOF' > wear_standalone/app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -107,8 +127,8 @@ jobs:
           </manifest>
           EOF
 
-          # 动态探测主工程 Kotlin 与 AGP 兼容配置，生成高兼容性 wear/build.gradle.kts
-          cat << 'EOF' > wear/build.gradle.kts
+          # 锁定 Kotlin 1.9.22 与 Compose Compiler 1.5.10 黄金匹配组合，100% 杜绝版本不匹配报错
+          cat << 'EOF' > wear_standalone/app/build.gradle.kts
           plugins {
               id("com.android.application")
               id("org.jetbrains.kotlin.android")
@@ -122,8 +142,8 @@ jobs:
                   applicationId = "com.c001apk.wear"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 210
-                  versionName = "2.1.0-Watch7-Full"
+                  versionCode = 220
+                  versionName = "2.2.0-Watch7-Full"
               }
 
               buildTypes {
@@ -151,7 +171,7 @@ jobs:
               }
 
               composeOptions {
-                  kotlinCompilerExtensionVersion = "1.5.14"
+                  kotlinCompilerExtensionVersion = "1.5.10"
               }
 
               packaging {
@@ -166,25 +186,26 @@ jobs:
               implementation("androidx.wear.compose:compose-foundation:1.3.1")
               implementation("androidx.wear.compose:compose-navigation:1.3.1")
 
-              implementation("androidx.activity:activity-compose:1.9.0")
-              implementation("androidx.compose.ui:ui:1.6.8")
-              implementation("androidx.compose.ui:ui-tooling-preview:1.6.8")
-              implementation("androidx.compose.material:material-icons-extended:1.6.8")
-              implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.2")
-              implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.2")
+              implementation("androidx.activity:activity-compose:1.8.2")
+              implementation("androidx.compose.ui:ui:1.6.4")
+              implementation("androidx.compose.ui:ui-tooling-preview:1.6.4")
+              implementation("androidx.compose.material:material-icons-extended:1.6.4")
+              implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
+              implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
 
               implementation("androidx.wear:wear-remote-interactions:1.0.0")
               implementation("androidx.concurrent:concurrent-futures-ktx:1.1.0")
+              implementation("com.google.guava:guava:31.1-android")
 
               implementation("com.squareup.okhttp3:okhttp:4.12.0")
-              implementation("com.google.code.gson:gson:2.11.0")
+              implementation("com.google.code.gson:gson:2.10.1")
               implementation("io.coil-kt:coil-compose:2.6.0")
-              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
           }
           EOF
 
-          # 5. 生成完整保留原版协议的网络层（支持游客免登录模式、完整 Cookie (SESSID/uid/token) 登录、多图高清解析、话题与个人中心）
-          cat << 'EOF' > wear/src/main/java/com/c001apk/wear/network/CoolapkNetwork.kt
+          # 4.3 生成完整保留原版协议的网络层（支持游客免登录模式、完整 Cookie (SESSID/uid/token) 登录、多图高清解析、话题与个人中心）
+          cat << 'EOF' > wear_standalone/app/src/main/java/com/c001apk/wear/network/CoolapkNetwork.kt
           package com.c001apk.wear.network
 
           import android.content.Context
@@ -368,12 +389,6 @@ jobs:
                   return "v2${base64NoWrap("c001apk_${bcryptSalt}_${deviceCode}")}"
               }
 
-              /**
-               * 智能兼容原版全部 Cookie 格式：
-               * 1. 用户直接粘贴完整 Cookie（含 uid=xxx; username=xxx; token=xxx; SESSID=xxx）
-               * 2. 用户只粘贴 SESSID 或 token
-               * 3. 留空时自动以【游客模式】访问酷安 API
-               */
               fun formatCookieHeader(rawInput: String): String {
                   val trimmed = rawInput.trim()
                   if (trimmed.isBlank()) return ""
@@ -506,7 +521,6 @@ jobs:
                               val title = obj.get("message_title")?.asString?.takeIf { it.isNotBlank() }
                                   ?: cleanMsg.lineSequence().firstOrNull()?.take(22) ?: "酷安动态"
 
-                              // 完整保留原版九宫格多图列表
                               val pics = mutableListOf<String>()
                               obj.getAsJsonArray("picArr")?.forEach { p ->
                                   if (p.isJsonPrimitive) {
@@ -642,7 +656,6 @@ jobs:
                   return@withContext fallback
               }
 
-              // 原版点赞与发送回复接口（当用户配置了 Cookie 时直接调用酷安真实 API）
               suspend fun postReply(feedId: String, content: String, rawCookie: String): Boolean = withContext(Dispatchers.IO) {
                   if (rawCookie.isBlank() || content.isBlank()) return@withContext false
                   try {
@@ -661,7 +674,6 @@ jobs:
               }
 
               private fun getFallbackWatchFeeds(tabType: String): List<WearFeedItem> {
-                  // 内置高清示例图，确保在网络受限或离线预览时也能测试手表看图与缩放功能
                   val demoPics = listOf(
                       "https://picsum.photos/seed/watch7a/600/400",
                       "https://picsum.photos/seed/watch7b/600/400"
@@ -704,8 +716,8 @@ jobs:
           }
           EOF
 
-          # 6. 生成 Google Wear OS 原生风格 UI (含：全屏可缩放图片查看器、卡片多图预览、游客/Cookie双模式切换、关注流与发评)
-          cat << 'EOF' > wear/src/main/java/com/c001apk/wear/MainActivity.kt
+          # 4.4 生成 Google Wear OS 原生风格 UI (含：全屏可缩放图片查看器、卡片多图预览、游客/Cookie双模式切换、关注流与发评)
+          cat << 'EOF' > wear_standalone/app/src/main/java/com/c001apk/wear/MainActivity.kt
           package com.c001apk.wear
 
           import android.content.Context
@@ -860,7 +872,6 @@ jobs:
               val bookmarkedFeeds = remember { mutableStateListOf<WearFeedItem>() }
               var selectedFeed by remember { mutableStateOf<WearFeedItem?>(null) }
 
-              // 腕上全屏图片查看器状态（支持多图切换与高清缩放）
               var viewerImages by remember { mutableStateOf<List<String>>(emptyList()) }
               var viewerInitialIndex by remember { mutableIntStateOf(0) }
 
@@ -1035,7 +1046,6 @@ jobs:
                       contentPadding = PaddingValues(horizontal = horizontalPad, vertical = 28.dp),
                       verticalArrangement = Arrangement.spacedBy(6.dp)
                   ) {
-                      // 0. 顶部模式状态胶囊（清晰显示当前是【游客模式】还是【Cookie已登录】）
                       item(key = "header") {
                           Row(
                               verticalAlignment = Alignment.CenterVertically,
@@ -1063,7 +1073,6 @@ jobs:
                           }
                       }
 
-                      // 1. Google Wear 顶部三联圆形快捷操作坞 (搜索 / 收藏 / 账号与Cookie)
                       item(key = "quick_dock") {
                           Row(
                               modifier = Modifier
@@ -1105,7 +1114,6 @@ jobs:
                           }
                       }
 
-                      // 2. 原版核心频道列表
                       item(key = "nav_headline") {
                           GoogleWearChannelPill(
                               title = "酷安头条",
@@ -1435,9 +1443,6 @@ jobs:
               }
           }
 
-          /**
-           * 支持直接预览多图缩略图的圆表动态卡片（点击卡片看正文，点击缩略图直接全屏看大图）
-           */
           @Composable
           fun GoogleWearFeedCard(
               item: WearFeedItem,
@@ -1520,7 +1525,6 @@ jobs:
                           lineHeight = (15.5f * fontScale).sp
                       )
 
-                      // 保留原版列表看图能力：如果动态含图片，在卡片内展示横向圆角缩略图栏，点击直接打开全屏看图器
                       if (item.picUrls.isNotEmpty()) {
                           Row(
                               modifier = Modifier
@@ -1652,10 +1656,6 @@ jobs:
               }
           }
 
-          /**
-           * 腕上全屏高清图片查看器：专为 Galaxy Watch 7 圆形表盘打造
-           * 支持：双击放大/缩小、双指捏合缩放、单指拖拽细节、多图上一张/下一张切换
-           */
           @Composable
           fun WatchFullImageViewerScreen(
               imageUrls: List<String>,
@@ -1702,7 +1702,7 @@ jobs:
                   AsyncImage(
                       model = ImageRequest.Builder(context)
                           .data(imageUrls[currentIndex])
-                          .size(900) // 高清大图模式解码
+                          .size(900)
                           .crossfade(true)
                           .build(),
                       contentDescription = "高清大图",
@@ -1717,7 +1717,6 @@ jobs:
                           )
                   )
 
-                  // 顶部页码与缩放倍数胶囊（避开圆表顶弧）
                   Row(
                       modifier = Modifier
                           .align(Alignment.TopCenter)
@@ -1736,7 +1735,6 @@ jobs:
                       )
                   }
 
-                  // 底部圆表专用操控栏：上一张 / 缩放切换 / 下一张
                   Row(
                       modifier = Modifier
                           .align(Alignment.BottomCenter)
@@ -1899,7 +1897,6 @@ jobs:
                           }
                       }
 
-                      // 帖子高清图集（点击任意一张直接进入全屏缩放看图器）
                       if (feed.picUrls.isNotEmpty()) {
                           items(
                               count = feed.picUrls.size,
@@ -2026,7 +2023,6 @@ jobs:
                           }
                       }
 
-                      // 原版发评功能（Cookie 登录态可直接在腕上发送快捷回复）
                       item(key = "quick_reply_box") {
                           Row(
                               verticalAlignment = Alignment.CenterVertically,
@@ -2162,7 +2158,6 @@ jobs:
                                       fontSize = (12 * fontScale).sp,
                                       lineHeight = (16.5f * fontScale).sp
                                   )
-                                  // 评论区带图同样支持点开全屏看大图
                                   if (reply.picUrl.isNotBlank() && reply.picUrl.startsWith("http")) {
                                       AsyncImage(
                                           model = ImageRequest.Builder(context)
@@ -2390,9 +2385,6 @@ jobs:
               }
           }
 
-          /**
-           * 原版 Cookie 登录中心 + 游客模式一键切换 + 圆表字号调节
-           */
           @Composable
           fun WatchAccountAndSettingsScreen(
               fontScale: Float,
@@ -2425,7 +2417,6 @@ jobs:
                       contentPadding = PaddingValues(horizontal = horizontalPad, vertical = 28.dp),
                       verticalArrangement = Arrangement.spacedBy(8.dp)
                   ) {
-                      // 0. 顶部账号/游客卡片
                       item(key = "profile_card") {
                           Column(
                               modifier = Modifier
@@ -2459,7 +2450,6 @@ jobs:
                           }
                       }
 
-                      // 1. 原版 Cookie 登录输入框（支持完整 Cookie 或 SESSID）
                       item(key = "cookie_input") {
                           Column(
                               modifier = Modifier
@@ -2521,7 +2511,6 @@ jobs:
                           }
                       }
 
-                      // 2. 圆表字号缩放调节
                       item(key = "font_scale_chip") {
                           val scaleLabel = when {
                               fontScale >= 1.2f -> "超大清晰字号 (125%)"
@@ -2559,30 +2548,22 @@ jobs:
           }
           EOF
 
-          # 7. 自动将 :wear 模块注册进 settings.gradle.kts 或 settings.gradle
-          if [ -f "settings.gradle.kts" ]; then
-              if ! grep -q 'include(":wear")' settings.gradle.kts; then
-                  echo "" >> settings.gradle.kts
-                  echo 'include(":wear")' >> settings.gradle.kts
-              fi
-          elif [ -f "settings.gradle" ]; then
-              if ! grep -q "include ':wear'" settings.gradle; then
-                  echo "" >> settings.gradle
-                  echo "include ':wear'" >> settings.gradle
-              fi
-          fi
-
       - name: 5. 编译三星 Galaxy Watch 7 腕上专属版 APK 与原版全功能 APK
         run: |
           chmod +x gradlew
-          ./gradlew :wear:assembleRelease --no-daemon --stacktrace
+          mkdir -p output_apks
+
+          echo "正在使用隔离环境编译 Galaxy Watch 7 腕上版 (避免主工程 Kotlin/Compose 版本冲突)..."
+          ./gradlew -p wear_standalone :app:assembleRelease --no-daemon --stacktrace
+          cp wear_standalone/app/build/outputs/apk/release/*.apk output_apks/c001apk-GalaxyWatch7-WearOS.apk
+
+          echo "正在同步编译原版 :app 安装包..."
           ./gradlew :app:assembleDebug --no-daemon || true
+          cp app/build/outputs/apk/debug/*.apk output_apks/ || true
 
       - name: 6. 上传编译好的 APK 安装包 (含 Watch 7 腕上版与原版)
         uses: actions/upload-artifact@v4
         with:
           name: c001apk-GalaxyWatch7-APK
-          path: |
-            wear/build/outputs/apk/release/*.apk
-            app/build/outputs/apk/debug/*.apk
+          path: output_apks/*.apk
           if-no-files-found: error
