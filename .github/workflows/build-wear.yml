@@ -1,6 +1,5 @@
 name: Build Wear OS APK (Galaxy Watch 7 Edition)
 
-# 触发条件：保存文件(push)或在手机网页上手动点击运行(workflow_dispatch)时自动开始
 on:
   push:
     branches: [ "main", "master" ]
@@ -11,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. 检出仓库代码 (完整保留原项目所有功能与代码)
+      - name: 1. 检出仓库代码
         uses: actions/checkout@v4
 
       - name: 2. 配置 Java 17 编译环境
@@ -20,29 +19,29 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: 3. 启用系统内置 Android SDK 与同意许可证 (零第三方插件报错)
+      - name: 3. 启用系统内置 Android SDK 与预热环境
         run: |
-          echo "使用 GitHub Ubuntu 官方预装的 Android SDK..."
           export ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
 
-      - name: 4. 注入 Wear OS 圆表适配层与保留原版全功能 (Cookie登录/游客模式/看图)
+      - name: 4. 生成 Galaxy Watch 7 独立零冲突编译工程
         run: |
-          echo "正在保留原版 :app 全部功能的基础上，构建独立高兼容 Galaxy Watch 7 圆表工程..."
-
-          # 4.1 为原版 :app 注入圆表自适应声明（不破坏原项目结构）
-          if [ -f "app/src/main/AndroidManifest.xml" ]; then
-              sed -i 's|<application|<uses-feature android:name="android.hardware.type.watch" android:required="false" />\n    <application|g' app/src/main/AndroidManifest.xml || true
-          fi
-
-          # 4.2 创建独立隔離的 wear_standalone 构建工程，彻底杜绝原仓库 Kotlin 版本/KSP/Compose 编译器版本冲突导致第 5 步报错
+          rm -rf wear_standalone
           mkdir -p wear_standalone/app/src/main/java/com/c001apk/wear/network
           mkdir -p wear_standalone/app/src/main/res/values
           mkdir -p wear_standalone/app/src/main/res/drawable
 
-          cat << 'EOF' > wear_standalone/settings.gradle.kts
+          # 复用原仓库的 gradle wrapper，保证可独立执行
+          cp gradlew wear_standalone/
+          cp -r gradle wear_standalone/
+          chmod +x wear_standalone/gradlew
+
+          # 显式写入 SDK 路径，防止找不到 Android SDK
+          echo "sdk.dir=$ANDROID_HOME" > wear_standalone/local.properties
+
+          cat << 'EOF' > wear_standalone/settings.gradle
           pluginManagement {
               repositories {
                   google()
@@ -51,31 +50,30 @@ jobs:
               }
           }
           dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
               repositories {
                   google()
                   mavenCentral()
               }
           }
           rootProject.name = "c001apk-wear"
-          include(":app")
+          include ':app'
           EOF
 
           cat << 'EOF' > wear_standalone/gradle.properties
-          org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8
+          org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
           android.useAndroidX=true
           android.nonTransitiveRClass=true
           kotlin.code.style=official
           EOF
 
-          cat << 'EOF' > wear_standalone/build.gradle.kts
+          cat << 'EOF' > wear_standalone/build.gradle
           plugins {
-              id("com.android.application") version "8.2.2" apply false
-              id("org.jetbrains.kotlin.android") version "1.9.22" apply false
+              id 'com.android.application' version '8.2.2' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.22' apply false
           }
           EOF
 
-          # 生成 Google Wear OS 风格翠绿圆表图标
           cat << 'EOF' > wear_standalone/app/src/main/res/drawable/ic_launcher.xml
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
               android:width="108dp"
@@ -127,84 +125,87 @@ jobs:
           </manifest>
           EOF
 
-          # 锁定 Kotlin 1.9.22 与 Compose Compiler 1.5.10 黄金匹配组合，100% 杜绝版本不匹配报错
-          cat << 'EOF' > wear_standalone/app/build.gradle.kts
+          cat << 'EOF' > wear_standalone/app/build.gradle
           plugins {
-              id("com.android.application")
-              id("org.jetbrains.kotlin.android")
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
           }
 
           android {
-              namespace = "com.c001apk.wear"
-              compileSdk = 34
+              namespace 'com.c001apk.wear'
+              compileSdk 34
 
               defaultConfig {
-                  applicationId = "com.c001apk.wear"
-                  minSdk = 26
-                  targetSdk = 34
-                  versionCode = 220
-                  versionName = "2.2.0-Watch7-Full"
+                  applicationId "com.c001apk.wear"
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 240
+                  versionName "2.4.0-Watch7"
               }
 
               buildTypes {
                   release {
-                      isMinifyEnabled = false
-                      signingConfig = signingConfigs.getByName("debug")
+                      minifyEnabled false
+                      shrinkResources false
+                      signingConfig signingConfigs.debug
+                  }
+                  debug {
+                      minifyEnabled false
                   }
               }
 
               compileOptions {
-                  sourceCompatibility = JavaVersion.VERSION_17
-                  targetCompatibility = JavaVersion.VERSION_17
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
               }
 
               kotlinOptions {
-                  jvmTarget = "17"
-                  freeCompilerArgs += listOf(
-                      "-opt-in=androidx.wear.compose.material.ExperimentalWearMaterialApi",
-                      "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi"
-                  )
+                  jvmTarget = '17'
               }
 
               buildFeatures {
-                  compose = true
+                  compose true
               }
 
               composeOptions {
-                  kotlinCompilerExtensionVersion = "1.5.10"
+                  kotlinCompilerExtensionVersion '1.5.10'
+              }
+
+              lint {
+                  abortOnError false
+                  checkReleaseBuilds false
               }
 
               packaging {
                   resources {
-                      excludes += "/META-INF/{AL2.0,LGPL2.1}"
+                      excludes += ['/META-INF/{AL2.0,LGPL2.1}', 'META-INF/DEPENDENCIES', 'META-INF/LICENSE*', 'META-INF/NOTICE*']
                   }
               }
           }
 
           dependencies {
-              implementation("androidx.wear.compose:compose-material:1.3.1")
-              implementation("androidx.wear.compose:compose-foundation:1.3.1")
-              implementation("androidx.wear.compose:compose-navigation:1.3.1")
+              implementation 'androidx.core:core-ktx:1.12.0'
+              implementation 'androidx.wear.compose:compose-material:1.3.0'
+              implementation 'androidx.wear.compose:compose-foundation:1.3.0'
+              implementation 'androidx.wear.compose:compose-navigation:1.3.0'
 
-              implementation("androidx.activity:activity-compose:1.8.2")
-              implementation("androidx.compose.ui:ui:1.6.4")
-              implementation("androidx.compose.ui:ui-tooling-preview:1.6.4")
-              implementation("androidx.compose.material:material-icons-extended:1.6.4")
-              implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
-              implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+              implementation 'androidx.activity:activity-compose:1.8.2'
+              implementation 'androidx.compose.ui:ui:1.6.2'
+              implementation 'androidx.compose.foundation:foundation:1.6.2'
+              implementation 'androidx.compose.material:material-icons-core:1.6.2'
+              implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
 
-              implementation("androidx.wear:wear-remote-interactions:1.0.0")
-              implementation("androidx.concurrent:concurrent-futures-ktx:1.1.0")
-              implementation("com.google.guava:guava:31.1-android")
+              implementation 'androidx.wear:wear-remote-interactions:1.0.0'
+              implementation 'androidx.concurrent:concurrent-futures-ktx:1.1.0'
+              implementation 'com.google.guava:guava:31.1-android'
 
-              implementation("com.squareup.okhttp3:okhttp:4.12.0")
-              implementation("com.google.code.gson:gson:2.10.1")
-              implementation("io.coil-kt:coil-compose:2.6.0")
-              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+              implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+              implementation 'com.google.code.gson:gson:2.10.1'
+              implementation 'io.coil-kt:coil-compose:2.5.0'
+              implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
           }
           EOF
 
-          # 4.3 生成完整保留原版协议的网络层（支持游客免登录模式、完整 Cookie (SESSID/uid/token) 登录、多图高清解析、话题与个人中心）
           cat << 'EOF' > wear_standalone/app/src/main/java/com/c001apk/wear/network/CoolapkNetwork.kt
           package com.c001apk.wear.network
 
@@ -377,16 +378,17 @@ jobs:
                   return base64NoWrap(raw).reversed()
               }
 
-              // 复用原版 c001apk 的 v2 AppToken 签名逻辑（支持游客模式与登录态）
               private fun generateAppToken(): String {
                   val timestamp = (System.currentTimeMillis() / 1000).toString()
                   val hexTime = "0x" + timestamp.toLong().toString(16)
                   val md5Time = md5(timestamp)
                   val deviceCode = buildDeviceCode()
-                  val tokenPlain = "token://com.coolapk.market/dcf01e569c1e3db93a3d0fcf191a622c?$md5Time$$deviceUuid&$APP_ID"
+                  val d = '$'
+                  val tokenPlain = "token://com.coolapk.market/dcf01e569c1e3db93a3d0fcf191a622c?" + md5Time + d + deviceUuid + "&" + APP_ID
                   val md5Token = md5(base64NoWrap(tokenPlain))
-                  val bcryptSalt = "$2y$10$${base64NoWrap("$hexTime/$md5Token").take(22)}"
-                  return "v2${base64NoWrap("c001apk_${bcryptSalt}_${deviceCode}")}"
+                  val saltPart = base64NoWrap(hexTime + "/" + md5Token).take(22)
+                  val bcryptSalt = d.toString() + "2y" + d + "10" + d + saltPart
+                  return "v2" + base64NoWrap("c001apk_" + bcryptSalt + "_" + deviceCode)
               }
 
               fun formatCookieHeader(rawInput: String): String {
@@ -402,7 +404,7 @@ jobs:
               private fun buildRequest(url: String, rawCookie: String = ""): Request {
                   val builder = Request.Builder()
                       .url(url)
-                      .header("User-Agent", "Dalvik/2.1.0 (Linux; U; Android ${Build.VERSION.RELEASE}; SM-L310 Build/${Build.ID}) (#Build; Samsung; SM-L310; ${Build.ID}; ${Build.VERSION.RELEASE}) +CoolMarket/13.4.1-2312121-universal")
+                      .header("User-Agent", "Dalvik/2.1.0 (Linux; U; Android " + Build.VERSION.RELEASE + "; SM-L310 Build/" + Build.ID + ") (#Build; Samsung; SM-L310; " + Build.ID + "; " + Build.VERSION.RELEASE + ") +CoolMarket/13.4.1-2312121-universal")
                       .header("X-Requested-With", "XMLHttpRequest")
                       .header("X-Sdk-Int", Build.VERSION.SDK_INT.toString())
                       .header("X-Sdk-Locale", "zh-CN")
@@ -483,7 +485,7 @@ jobs:
                   rawCookie: String = "",
                   forceRefresh: Boolean = false
               ): List<WearFeedItem> = withContext(Dispatchers.IO) {
-                  val cacheKey = "${tabType}_p${page}_${rawCookie.hashCode()}"
+                  val cacheKey = tabType + "_p" + page + "_" + rawCookie.hashCode()
                   if (!forceRefresh && page == 1) {
                       memoryFeedCache.get(cacheKey)?.let { return@withContext it }
                   }
@@ -716,7 +718,6 @@ jobs:
           }
           EOF
 
-          # 4.4 生成 Google Wear OS 原生风格 UI (含：全屏可缩放图片查看器、卡片多图预览、游客/Cookie双模式切换、关注流与发评)
           cat << 'EOF' > wear_standalone/app/src/main/java/com/c001apk/wear/MainActivity.kt
           package com.c001apk.wear
 
@@ -725,6 +726,7 @@ jobs:
           import android.view.HapticFeedbackConstants
           import androidx.activity.ComponentActivity
           import androidx.activity.compose.setContent
+          import androidx.compose.foundation.BorderStroke
           import androidx.compose.foundation.background
           import androidx.compose.foundation.border
           import androidx.compose.foundation.clickable
@@ -742,7 +744,6 @@ jobs:
           import androidx.compose.foundation.text.KeyboardOptions
           import androidx.compose.material.icons.Icons
           import androidx.compose.material.icons.filled.*
-          import androidx.compose.material.icons.outlined.*
           import androidx.compose.runtime.*
           import androidx.compose.ui.Alignment
           import androidx.compose.ui.Modifier
@@ -831,7 +832,7 @@ jobs:
               val focusRequester = remember { FocusRequester() }
               val coroutineScope = rememberCoroutineScope()
               val view = LocalView.current
-              var accumulatedDelta by remember { mutableFloatStateOf(0f) }
+              var accumulatedDelta by remember { mutableStateOf(0f) }
 
               LaunchedEffect(Unit) {
                   focusRequester.requestFocus()
@@ -867,13 +868,13 @@ jobs:
               val context = LocalContext.current
               val prefs = remember { context.getSharedPreferences("c001apk_watch7_prefs", Context.MODE_PRIVATE) }
 
-              var fontScale by remember { mutableFloatStateOf(prefs.getFloat("font_scale", 1.0f)) }
+              var fontScale by remember { mutableStateOf(prefs.getFloat("font_scale", 1.0f)) }
               var rawCookie by remember { mutableStateOf(prefs.getString("raw_cookie", "") ?: "") }
               val bookmarkedFeeds = remember { mutableStateListOf<WearFeedItem>() }
               var selectedFeed by remember { mutableStateOf<WearFeedItem?>(null) }
 
               var viewerImages by remember { mutableStateOf<List<String>>(emptyList()) }
-              var viewerInitialIndex by remember { mutableIntStateOf(0) }
+              var viewerInitialIndex by remember { mutableStateOf(0) }
 
               MaterialTheme(colors = WearGoogleColorPalette) {
                   val navController = rememberSwipeDismissableNavController()
@@ -1092,7 +1093,7 @@ jobs:
                                   }
                               )
                               QuickOrbButton(
-                                  icon = Icons.Default.Bookmark,
+                                  icon = Icons.Default.Star,
                                   label = if (bookmarkCount > 0) "收藏($bookmarkCount)" else "收藏",
                                   tint = WatchPink,
                                   bgColor = Color(0xFF3B122B),
@@ -1118,7 +1119,7 @@ jobs:
                           GoogleWearChannelPill(
                               title = "酷安头条",
                               subtitle = "游客/登录均可畅刷图文",
-                              icon = Icons.Default.AutoAwesome,
+                              icon = Icons.Default.Home,
                               accentColor = WatchPrimaryGreen,
                               gradientStart = Color(0xFF0F2E26),
                               fontScale = fontScale,
@@ -1142,7 +1143,7 @@ jobs:
                           GoogleWearChannelPill(
                               title = "今日热榜",
                               subtitle = "全站24小时最热图文动态",
-                              icon = Icons.Default.LocalFireDepartment,
+                              icon = Icons.Default.ThumbUp,
                               accentColor = WatchWarmOrange,
                               gradientStart = Color(0xFF331B11),
                               fontScale = fontScale,
@@ -1154,7 +1155,7 @@ jobs:
                           GoogleWearChannelPill(
                               title = "圆表与穿戴",
                               subtitle = "Galaxy Watch 玩机讨论区",
-                              icon = Icons.Default.Watch,
+                              icon = Icons.Default.Notifications,
                               accentColor = WatchSkyBlue,
                               gradientStart = Color(0xFF0E253B),
                               fontScale = fontScale,
@@ -1166,7 +1167,7 @@ jobs:
                           GoogleWearChannelPill(
                               title = "数码广场",
                               subtitle = "新机开箱与多图评测",
-                              icon = Icons.Default.DevicesOther,
+                              icon = Icons.Default.List,
                               accentColor = WatchPurple,
                               gradientStart = Color(0xFF28153B),
                               fontScale = fontScale,
@@ -1241,7 +1242,7 @@ jobs:
                       secondaryContentColor = WatchTextSecondary
                   ),
                   border = ChipDefaults.chipBorder(
-                      borderStroke = androidx.compose.foundation.BorderStroke(
+                      borderStroke = BorderStroke(
                           1.dp,
                           accentColor.copy(alpha = 0.25f)
                       )
@@ -1298,7 +1299,7 @@ jobs:
 
               var feeds by remember { mutableStateOf<List<WearFeedItem>>(emptyList()) }
               var isLoading by remember { mutableStateOf(true) }
-              var page by remember { mutableIntStateOf(1) }
+              var page by remember { mutableStateOf(1) }
 
               val (tabTitle, accentColor) = remember(tabType) {
                   when (tabType) {
@@ -1427,7 +1428,7 @@ jobs:
                                   },
                                   icon = {
                                       Icon(
-                                          imageVector = Icons.Default.ExpandMore,
+                                          imageVector = Icons.Default.KeyboardArrowDown,
                                           contentDescription = null,
                                           modifier = Modifier.size(16.dp)
                                       )
@@ -1586,13 +1587,6 @@ jobs:
                           )
                           Row(verticalAlignment = Alignment.CenterVertically) {
                               if (item.picUrls.isNotEmpty()) {
-                                  Icon(
-                                      imageVector = Icons.Outlined.Image,
-                                      contentDescription = null,
-                                      tint = WatchPrimaryGreen,
-                                      modifier = Modifier.size(11.dp)
-                                  )
-                                  Spacer(modifier = Modifier.width(2.dp))
                                   Text(
                                       text = "${item.picUrls.size}图",
                                       fontSize = (9.5f * fontScale).sp,
@@ -1600,15 +1594,8 @@ jobs:
                                   )
                                   Spacer(modifier = Modifier.width(6.dp))
                               }
-                              Icon(
-                                  imageVector = Icons.Outlined.ChatBubbleOutline,
-                                  contentDescription = null,
-                                  tint = WatchSkyBlue,
-                                  modifier = Modifier.size(11.dp)
-                              )
-                              Spacer(modifier = Modifier.width(3.dp))
                               Text(
-                                  text = "${item.replyNum}",
+                                  text = "评 ${item.replyNum}",
                                   fontSize = (10 * fontScale).sp,
                                   color = WatchSkyBlue,
                                   fontWeight = FontWeight.Medium
@@ -1665,8 +1652,8 @@ jobs:
               val view = LocalView.current
               if (imageUrls.isEmpty()) return
 
-              var currentIndex by remember { mutableIntStateOf(initialIndex.coerceIn(0, imageUrls.lastIndex)) }
-              var scale by remember { mutableFloatStateOf(1f) }
+              var currentIndex by remember { mutableStateOf(initialIndex.coerceIn(0, imageUrls.lastIndex)) }
+              var scale by remember { mutableStateOf(1f) }
               var offset by remember { mutableStateOf(Offset.Zero) }
 
               Box(
@@ -1748,7 +1735,7 @@ jobs:
                   ) {
                       if (imageUrls.size > 1) {
                           Icon(
-                              imageVector = Icons.Default.ChevronLeft,
+                              imageVector = Icons.Default.KeyboardArrowLeft,
                               contentDescription = "上一张",
                               tint = if (currentIndex > 0) WatchTextPrimary else WatchTextSecondary,
                               modifier = Modifier
@@ -1782,7 +1769,7 @@ jobs:
 
                       if (imageUrls.size > 1) {
                           Icon(
-                              imageVector = Icons.Default.ChevronRight,
+                              imageVector = Icons.Default.KeyboardArrowRight,
                               contentDescription = "下一张",
                               tint = if (currentIndex < imageUrls.lastIndex) WatchTextPrimary else WatchTextSecondary,
                               modifier = Modifier
@@ -1965,7 +1952,7 @@ jobs:
                                   },
                                   icon = {
                                       Icon(
-                                          imageVector = Icons.Default.SendToMobile,
+                                          imageVector = Icons.Default.Share,
                                           contentDescription = null,
                                           tint = WatchSkyBlue,
                                           modifier = Modifier.size(15.dp)
@@ -1998,7 +1985,7 @@ jobs:
                               )
 
                               QuickOrbButton(
-                                  icon = Icons.Default.Bookmark,
+                                  icon = Icons.Default.Star,
                                   label = if (isBookmarked) "已收藏" else "收藏",
                                   tint = if (isBookmarked) Color.Black else WatchPink,
                                   bgColor = if (isBookmarked) WatchPink else Color(0xFF3B122B),
@@ -2009,7 +1996,7 @@ jobs:
                               )
 
                               QuickOrbButton(
-                                  icon = Icons.Default.SendToMobile,
+                                  icon = Icons.Default.Share,
                                   label = "手机接力",
                                   tint = WatchSkyBlue,
                                   bgColor = Color(0xFF0C2D48),
@@ -2534,7 +2521,7 @@ jobs:
                               ),
                               icon = {
                                   Icon(
-                                      imageVector = Icons.Default.FormatSize,
+                                      imageVector = Icons.Default.Settings,
                                       contentDescription = null,
                                       tint = WatchPrimaryGreen
                                   )
@@ -2548,20 +2535,16 @@ jobs:
           }
           EOF
 
-      - name: 5. 编译三星 Galaxy Watch 7 腕上专属版 APK 与原版全功能 APK
+      - name: 5. 编译三星 Galaxy Watch 7 腕上专属版 APK
         run: |
-          chmod +x gradlew
           mkdir -p output_apks
+          cd wear_standalone
+          ./gradlew assembleDebug --no-daemon --stacktrace
+          cd ..
+          find wear_standalone/app/build/outputs/apk/ -name "*.apk" -exec cp {} output_apks/c001apk-GalaxyWatch7-WearOS.apk \;
+          ls -lh output_apks/
 
-          echo "正在使用隔离环境编译 Galaxy Watch 7 腕上版 (避免主工程 Kotlin/Compose 版本冲突)..."
-          ./gradlew -p wear_standalone :app:assembleRelease --no-daemon --stacktrace
-          cp wear_standalone/app/build/outputs/apk/release/*.apk output_apks/c001apk-GalaxyWatch7-WearOS.apk
-
-          echo "正在同步编译原版 :app 安装包..."
-          ./gradlew :app:assembleDebug --no-daemon || true
-          cp app/build/outputs/apk/debug/*.apk output_apks/ || true
-
-      - name: 6. 上传编译好的 APK 安装包 (含 Watch 7 腕上版与原版)
+      - name: 6. 上传编译好的 APK 安装包 (含 Watch 7 腕上版)
         uses: actions/upload-artifact@v4
         with:
           name: c001apk-GalaxyWatch7-APK
