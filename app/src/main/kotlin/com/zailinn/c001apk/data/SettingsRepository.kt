@@ -15,6 +15,12 @@ import com.zailinn.c001apk.core.update.UpdatePreferenceStore
 import kotlinx.coroutines.flow.StateFlow
 
 data class AppSettings(
+    val archiveAutoBackup: String = "Off",
+    val archiveIncludeReplies: Boolean = true,
+    val archiveImagesWifiOnly: Boolean = false,
+    val archiveImageQuality: String = "Original",
+    val hapticFeedback: Boolean = true,
+    val mediaAutoPlay: com.zailinn.c001apk.core.model.MediaAutoPlay = com.zailinn.c001apk.core.model.MediaAutoPlay.Wifi,
     val dynamicColor: Boolean = true,
     val staticColor: Int = 0,
     /** 0 follow system, 1 light, 2 dark. */
@@ -32,12 +38,14 @@ data class AppSettings(
     val showEmoji: Boolean = true,
     /** Refresh the home list when coming back to it from another page or tab. */
     val refreshOnReturn: Boolean = false,
+    /** Slide the main screen's top and bottom bars away while scrolling down. */
+    val hideBarsOnScroll: Boolean = true,
     val secretFollow: Boolean = false,
-    /** Fold feeds and replies that match the sensitive-topic word list. */
-    val sensitiveFold: Boolean = false,
-    /** Remove matching feeds and replies entirely instead of folding them. */
-    val sensitiveHide: Boolean = false,
-    /** Also fold by meaning with the downloaded model. */
+    /** Feeds and replies matching a filter category show folded; off removes them. */
+    val filterFold: Boolean = true,
+    /** Categories also use their strict words, which catch more but hide some ordinary posts. */
+    val filterStrict: Boolean = false,
+    /** Also match by meaning with the downloaded model. */
     val semanticFold: Boolean = false,
     val semanticThreshold: Float = SemanticAnchors.DEFAULT_THRESHOLD,
     val installTime: String = "",
@@ -62,10 +70,13 @@ fun androidDevice() = DeviceProfile(
     androidVersion = Build.VERSION.RELEASE,
 )
 
-/** Either switch turns sensitive-topic matching on; hiding wins over folding. */
-val AppSettings.sensitiveFilterOn: Boolean get() = sensitiveFold || sensitiveHide
-
 object SettingKeys {
+    val archiveAutoBackup = stringPreferencesKey("archiveAutoBackup")
+    val archiveIncludeReplies = booleanPreferencesKey("archiveIncludeReplies")
+    val archiveImagesWifiOnly = booleanPreferencesKey("archiveImagesWifiOnly")
+    val archiveImageQuality = stringPreferencesKey("archiveImageQuality")
+    val hapticFeedback = booleanPreferencesKey("hapticFeedback")
+    val mediaAutoPlay = stringPreferencesKey("mediaAutoPlay")
     val dynamicColor = booleanPreferencesKey("useMaterial")
     val staticColor = intPreferencesKey("staticColor")
     val themeMode = intPreferencesKey("selectedTheme")
@@ -78,9 +89,10 @@ object SettingKeys {
     val recordHistory = booleanPreferencesKey("recordHistory")
     val showEmoji = booleanPreferencesKey("showEmoji")
     val refreshOnReturn = booleanPreferencesKey("refreshOnReturn")
+    val hideBarsOnScroll = booleanPreferencesKey("hideBarsOnScroll")
     val secretFollow = booleanPreferencesKey("secretFollowEnabled")
-    val sensitiveFold = booleanPreferencesKey("sensitiveFold")
-    val sensitiveHide = booleanPreferencesKey("sensitiveHide")
+    val filterFold = booleanPreferencesKey("filterFold")
+    val filterStrict = booleanPreferencesKey("filterStrict")
     val semanticFold = booleanPreferencesKey("semanticFold")
     val semanticThreshold = floatPreferencesKey("semanticThreshold")
     val installTime = stringPreferencesKey("installTime")
@@ -124,21 +136,32 @@ class SettingsRepository(
     /** Uses this phone's model and system; the device ID stays. */
     suspend fun useLocalDevice() = saveProtocol(current.protocol.withProfile(localDevice()), PROTOCOL_LOCAL)
 
-    /** A different real phone model with a new device ID (the SZLM ID, if set, is kept). */
-    suspend fun regenerateProtocol() {
+    /**
+     * A different real phone model with a new device ID. Not available while an
+     * SZLM ID is set: that ID belongs to this phone, and sending it with another
+     * model would look less like a real device, not more. Returns false then.
+     */
+    suspend fun regenerateProtocol(): Boolean {
+        if (current.protocol.szlmId.isNotEmpty()) return false
         val currentModel = current.protocol.profile
         var params: ProtocolParams
-        do params = ProtocolParams.generate(current.protocol.szlmId) while (params.profile == currentModel)
+        do params = ProtocolParams.generate() while (params.profile == currentModel)
         saveProtocol(params, PROTOCOL_GENERATED)
+        return true
     }
 
     /**
-     * Uses [id] as the device ID, keeping the model. Clearing it, when it was
-     * the device ID, starts a fresh random one.
+     * Uses [id] as the device ID. Setting one also switches back to this phone's
+     * model and system, since the ID was read from the official app on this phone.
+     * Clearing it, when it was the device ID, starts a fresh random one and keeps the model.
      */
     suspend fun setSzlmId(id: String) {
         val params = current.protocol
-        saveProtocol(params.copy(szlmId = id).withDevice(newId = id.isEmpty() && params.szlmId.isNotEmpty()))
+        if (id.isNotEmpty()) {
+            saveProtocol(params.copy(szlmId = id).withProfile(localDevice()), PROTOCOL_LOCAL)
+        } else {
+            saveProtocol(params.copy(szlmId = id).withDevice(newId = params.szlmId.isNotEmpty()))
+        }
     }
 
     /** [source] null keeps the current one; editing device fields by hand passes [PROTOCOL_GENERATED]. */
@@ -161,6 +184,13 @@ class SettingsRepository(
     suspend fun <T> set(key: Preferences.Key<T>, value: T) = store.edit { it[key] = value }
 
     private fun read(p: Preferences) = AppSettings(
+        archiveAutoBackup = p[SettingKeys.archiveAutoBackup] ?: "Off",
+        archiveIncludeReplies = p[SettingKeys.archiveIncludeReplies] ?: true,
+        archiveImagesWifiOnly = p[SettingKeys.archiveImagesWifiOnly] ?: false,
+        archiveImageQuality = p[SettingKeys.archiveImageQuality] ?: "Original",
+        hapticFeedback = p[SettingKeys.hapticFeedback] ?: true,
+        mediaAutoPlay = com.zailinn.c001apk.core.model.MediaAutoPlay.entries.firstOrNull { it.name == p[SettingKeys.mediaAutoPlay] }
+            ?: com.zailinn.c001apk.core.model.MediaAutoPlay.Wifi,
         dynamicColor = p[SettingKeys.dynamicColor] ?: true,
         staticColor = p[SettingKeys.staticColor] ?: 0,
         themeMode = p[SettingKeys.themeMode] ?: 0,
@@ -173,9 +203,10 @@ class SettingsRepository(
         recordHistory = p[SettingKeys.recordHistory] ?: true,
         showEmoji = p[SettingKeys.showEmoji] ?: true,
         refreshOnReturn = p[SettingKeys.refreshOnReturn] ?: false,
+        hideBarsOnScroll = p[SettingKeys.hideBarsOnScroll] ?: true,
         secretFollow = p[SettingKeys.secretFollow] ?: false,
-        sensitiveFold = p[SettingKeys.sensitiveFold] ?: false,
-        sensitiveHide = p[SettingKeys.sensitiveHide] ?: false,
+        filterFold = p[SettingKeys.filterFold] ?: true,
+        filterStrict = p[SettingKeys.filterStrict] ?: false,
         semanticFold = p[SettingKeys.semanticFold] ?: false,
         semanticThreshold = p[SettingKeys.semanticThreshold] ?: SemanticAnchors.DEFAULT_THRESHOLD,
         installTime = p[SettingKeys.installTime].orEmpty(),

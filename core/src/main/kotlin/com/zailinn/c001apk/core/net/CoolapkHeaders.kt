@@ -36,6 +36,8 @@ internal class SessionChangedException : IOException("账号已切换")
 class CoolapkHeaders(
     private val session: SessionState,
     private val protocol: () -> ProtocolParams,
+    /** Whether the app shows dark mode now; the official app reports its own as X-Dark-Mode. */
+    private val darkMode: () -> Boolean = { false },
     private val token: (ProtocolParams) -> String = { TokenUtils.getTokenV3(it.xAppDevice, appCode = it.versionCode.toInt()) },
 ) : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
@@ -56,8 +58,16 @@ class CoolapkHeaders(
         val url = request.url
         val params = protocol()
         val builder = request.newBuilder()
+        // Redirects copy custom headers. Remove the previous host's identity
+        // before deciding what the current HTTPS destination may receive.
+        request.headers.names().forEach { name ->
+            if (name.startsWith("X-App-", ignoreCase = true) || name.startsWith("X-Sdk-", ignoreCase = true) ||
+                name.equals("Cookie", ignoreCase = true) || name.equals("X-Requested-With", ignoreCase = true) ||
+                name.equals("X-Dark-Mode", ignoreCase = true)
+            ) builder.removeHeader(name)
+        }
         when {
-            url.host == "account.coolapk.com" -> {
+            url.isHttps && url.host == "account.coolapk.com" -> {
                 builder.header("sec-ch-ua", "\"Android WebView\";v=\"117\", \"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"117\"")
                 builder.header("sec-ch-ua-mobile", "?1")
                 builder.header("sec-ch-ua-platform", "Android")
@@ -89,7 +99,7 @@ class CoolapkHeaders(
                 builder.header("X-App-Code", params.versionCode)
                 builder.header("X-Api-Version", params.apiVersion)
                 builder.header("X-App-Device", params.xAppDevice)
-                builder.header("X-Dark-Mode", "0")
+                builder.header("X-Dark-Mode", if (darkMode()) "1" else "0")
                 builder.header("X-App-Channel", Constants.CHANNEL)
                 builder.header("X-App-Mode", Constants.MODE)
                 builder.header("X-App-Supported", params.versionCode)
@@ -126,7 +136,7 @@ class CoolapkHeaders(
         private val publicFeedPath = Regex("^/feed/[0-9]+$")
         val apiHosts = setOf("api.coolapk.com", "api2.coolapk.com")
 
-        fun isApiHost(request: Request) = request.url.host in apiHosts
+        fun isApiHost(request: Request) = request.url.isHttps && request.url.host in apiHosts
 
         fun isPublicFeed(request: Request) =
             request.url.isHttps && request.url.host == "www.coolapk.com" && request.method == "GET" &&
