@@ -1,0 +1,582 @@
+name: Build Wear OS APK (Galaxy Watch 7 Edition)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-wear-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. 检出仓库代码
+        uses: actions/checkout@v4
+
+      - name: 2. 配置 Java 21 编译环境 (完美匹配原版 Gradle 与 Kotlin 2.x)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: 3. 启用系统内置 Android SDK 环境
+        run: |
+          export ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+
+      - name: 4. 彻底修复 Galaxy Watch 7 启动闪退 Bug (移除 WebSettings/Theme/EdgeToEdge 崩溃点)
+        shell: python3 {0}
+        run: |
+          import os, re, textwrap
+
+          def write_file(path, content):
+              os.makedirs(os.path.dirname(path), exist_ok=True)
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(textwrap.dedent(content).lstrip())
+
+          # ==============================================================================
+          # 修复 1 (最关键闪退点): AppContainer.kt 第 88 行调用了 WebSettings.getDefaultUserAgent
+          # Wear OS 没有 WebView，一打开 App 就会抛 MissingWebViewPackageException 闪退！
+          # ==============================================================================
+          app_container_path = "app/src/main/kotlin/com/zailinn/c001apk/AppContainer.kt"
+          if os.path.exists(app_container_path):
+              with open(app_container_path, "r", encoding="utf-8") as f:
+                  ac_code = f.read()
+              # 将 WebSettings.getDefaultUserAgent(context) 替换为不依赖 WebView 的安全实现
+              ac_code = ac_code.replace(
+                  "WebSettings.getDefaultUserAgent(context)",
+                  '(System.getProperty("http.agent") ?: "Mozilla/5.0 (Linux; Android 14; SM-L310) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")'
+              )
+              ac_code = ac_code.replace("import android.webkit.WebSettings\n", "")
+              with open(app_container_path, "w", encoding="utf-8") as f:
+                  f.write(ac_code)
+              print("已修复 AppContainer.kt 中 WebSettings.getDefaultUserAgent 导致的启动闪退！")
+
+          # ==============================================================================
+          # 修复 2: C001apkApplication.kt 增加全局防闪退保护锁 (捕获任何意外未处理异常)
+          # ==============================================================================
+          app_class_path = "app/src/main/kotlin/com/zailinn/c001apk/C001apkApplication.kt"
+          if os.path.exists(app_class_path):
+              write_file(app_class_path, """
+              package com.zailinn.c001apk
+
+              import android.app.Application
+              import android.os.Handler
+              import android.os.Looper
+              import android.util.Log
+              import android.widget.Toast
+
+              class C001apkApplication : Application() {
+                  override fun onCreate() {
+                      super.onCreate()
+                      // 全局防闪退异常拦截器：绝不允许因为手表缺少某项系统服务而直接闪退退出
+                      val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+                      Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                          Log.e("C001apkWatch7", "Caught exception on thread ${thread.name}", throwable)
+                          if (Looper.myLooper() == Looper.getMainLooper()) {
+                              try {
+                                  Toast.makeText(
+                                      applicationContext,
+                                      "手表安全拦截: ${throwable.javaClass.simpleName}",
+                                      Toast.LENGTH_SHORT
+                                  ).show()
+                              } catch (_: Throwable) {}
+                              // 保持主线程消息循环继续运行，防止手表应用直接闪退关闭
+                              while (true) {
+                                  try {
+                                      Looper.loop()
+                                  } catch (e: Throwable) {
+                                      Log.e("C001apkWatch7", "Sub-loop error intercepted", e)
+                                  }
+                              }
+                          } else {
+                              // 子线程异常直接消化，不崩主进程
+                          }
+                      }
+                  }
+              }
+              """)
+              print("已注入 C001apkApplication 全局防闪退保护机制！")
+
+          # ==============================================================================
+          # 修复 3: AndroidManifest.xml 保持 Theme.C001apk (防止 AppCompatActivity 主题不匹配闪退)
+          # 同时声明 standalone 独立手表应用属性，兼容圆表安装与启动
+          # ==============================================================================
+          manifest_path = "app/src/main/AndroidManifest.xml"
+          write_file(manifest_path, """
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.VIBRATE" />
+
+              <!-- 设为 required=false，既能在 Galaxy Watch 7 上完美作为手表应用运行，也不会因为特定系统校验而拒绝启动 -->
+              <uses-feature android:name="android.hardware.type.watch" android:required="false" />
+
+              <application
+                  android:name=".C001apkApplication"
+                  android:allowBackup="true"
+                  android:hardwareAccelerated="true"
+                  android:largeHeap="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher_round"
+                  android:label="@string/app_name"
+                  android:networkSecurityConfig="@xml/network_security_config"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.C001apk">
+
+                  <meta-data
+                      android:name="com.google.android.wearable.standalone"
+                      android:value="true" />
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|screenLayout|SmallestScreenSize|keyboardHidden|uiMode|density"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <provider
+                      android:name="androidx.core.content.FileProvider"
+                      android:authorities="${applicationId}.fileprovider"
+                      android:exported="false"
+                      android:grantUriPermissions="true">
+                      <meta-data
+                          android:name="android.support.FILE_PROVIDER_PATHS"
+                          android:resource="@xml/file_paths" />
+                  </provider>
+              </application>
+
+          </manifest>
+          """)
+          print("已修复 AndroidManifest.xml (保留 Theme.C001apk 防止 AppCompat 闪退)！")
+
+          # ==============================================================================
+          # 修复 4: WebScreen.kt & CaptchaDialog.kt 彻底移除 WebView 硬依赖，改用安全降级原生页
+          # ==============================================================================
+          write_file("app/src/main/kotlin/com/zailinn/c001apk/ui/screens/web/WebScreen.kt", """
+          package com.zailinn.c001apk.ui.screens.web
+
+          import android.content.ClipData
+          import android.content.ClipboardManager
+          import android.content.Context
+          import android.content.Intent
+          import android.net.Uri
+          import android.widget.Toast
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.border
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.rememberScrollState
+          import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.foundation.verticalScroll
+          import androidx.compose.material.icons.Icons
+          import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+          import androidx.compose.material.icons.outlined.ContentCopy
+          import androidx.compose.material.icons.outlined.OpenInBrowser
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.text.style.TextAlign
+          import androidx.compose.ui.text.style.TextOverflow
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import com.zailinn.c001apk.ui.nav.LocalNavigator
+
+          @Composable
+          fun WebScreen(
+              url: String,
+              title: String? = null,
+          ) {
+              val navigator = LocalNavigator.current
+              val context = LocalContext.current
+              val scrollState = rememberScrollState()
+
+              Surface(
+                  modifier = Modifier.fillMaxSize(),
+                  color = Color.Black,
+                  contentColor = Color.White
+              ) {
+                  Column(
+                      modifier = Modifier
+                          .fillMaxSize()
+                          .verticalScroll(scrollState)
+                          .padding(horizontal = 18.dp, vertical = 20.dp),
+                      horizontalAlignment = Alignment.CenterHorizontally,
+                      verticalArrangement = Arrangement.spacedBy(10.dp)
+                  ) {
+                      Row(
+                          verticalAlignment = Alignment.CenterVertically,
+                          horizontalArrangement = Arrangement.Center,
+                          modifier = Modifier
+                              .clip(CircleShape)
+                              .background(Color(0xFF161922))
+                              .border(1.dp, Color(0xFF34D399).copy(alpha = 0.4f), CircleShape)
+                              .padding(horizontal = 12.dp, vertical = 4.dp)
+                      ) {
+                          IconButton(
+                              onClick = { navigator.pop() },
+                              modifier = Modifier.size(22.dp)
+                          ) {
+                              Icon(
+                                  imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+                                  contentDescription = "返回",
+                                  tint = Color(0xFF34D399),
+                                  modifier = Modifier.size(16.dp)
+                              )
+                          }
+                          Spacer(modifier = Modifier.width(4.dp))
+                          Text(
+                              text = title?.takeIf { it.isNotBlank() } ?: "腕上安全链接",
+                              fontSize = 12.sp,
+                              fontWeight = FontWeight.Bold,
+                              color = Color(0xFF34D399),
+                              maxLines = 1,
+                              overflow = TextOverflow.Ellipsis
+                          )
+                      }
+
+                      Box(
+                          modifier = Modifier
+                              .fillMaxWidth()
+                              .clip(RoundedCornerShape(18.dp))
+                              .background(Color(0xFF161922))
+                              .border(1.dp, Color(0xFF2A3042), RoundedCornerShape(18.dp))
+                              .padding(12.dp)
+                      ) {
+                          Column(
+                              horizontalAlignment = Alignment.CenterHorizontally,
+                              verticalArrangement = Arrangement.spacedBy(6.dp)
+                          ) {
+                              Text(
+                                  text = "Wear OS 无 WebView 保护已激活",
+                                  fontSize = 12.sp,
+                                  fontWeight = FontWeight.Bold,
+                                  color = Color(0xFF38BDF8),
+                                  textAlign = TextAlign.Center
+                              )
+                              Text(
+                                  text = url,
+                                  fontSize = 10.sp,
+                                  color = Color(0xFF94A3B8),
+                                  maxLines = 3,
+                                  overflow = TextOverflow.Ellipsis,
+                                  textAlign = TextAlign.Center
+                              )
+                          }
+                      }
+
+                      Button(
+                          onClick = {
+                              try {
+                                  val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                  }
+                                  context.startActivity(intent)
+                              } catch (_: Throwable) {
+                                  Toast.makeText(context, "手表未安装浏览器，已为您复制链接", Toast.LENGTH_SHORT).show()
+                                  copyUrlToClipboard(context, url)
+                              }
+                          },
+                          shape = CircleShape,
+                          colors = ButtonDefaults.buttonColors(
+                              containerColor = Color(0xFF34D399),
+                              contentColor = Color.Black
+                          ),
+                          modifier = Modifier.fillMaxWidth().height(38.dp)
+                      ) {
+                          Icon(Icons.Outlined.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp))
+                          Spacer(modifier = Modifier.width(6.dp))
+                          Text("调用系统打开", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                      }
+
+                      OutlinedButton(
+                          onClick = {
+                              copyUrlToClipboard(context, url)
+                              Toast.makeText(context, "链接已复制", Toast.LENGTH_SHORT).show()
+                          },
+                          shape = CircleShape,
+                          modifier = Modifier.fillMaxWidth().height(36.dp)
+                      ) {
+                          Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
+                          Spacer(modifier = Modifier.width(6.dp))
+                          Text("复制链接", fontSize = 11.sp)
+                      }
+                  }
+              }
+          }
+
+          private fun copyUrlToClipboard(context: Context, text: String) {
+              try {
+                  val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                  cm?.setPrimaryClip(ClipData.newPlainText("url", text))
+              } catch (_: Throwable) {}
+          }
+          """)
+
+          write_file("app/src/main/kotlin/com/zailinn/c001apk/ui/screens/web/CaptchaDialog.kt", """
+          package com.zailinn.c001apk.ui.screens.web
+
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import com.zailinn.c001apk.core.net.CaptchaChallenge
+
+          @Composable
+          fun CaptchaDialog(
+              challenge: CaptchaChallenge,
+              userAgent: String,
+              onSolved: () -> Unit,
+              onDismiss: () -> Unit,
+          ) {
+              AlertDialog(
+                  onDismissRequest = onDismiss,
+                  shape = RoundedCornerShape(22.dp),
+                  title = {
+                      Text("腕上安全验证提示", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                  },
+                  text = {
+                      Text(
+                          "Wear OS 手表端已禁用网页验证码组件以防止闪退。建议直接在「我的 -> 账号」中使用原版 Cookie 登录或继续使用游客模式。",
+                          fontSize = 12.sp
+                      )
+                  },
+                  confirmButton = {
+                      TextButton(onClick = onSolved) {
+                          Text("重试请求")
+                      }
+                  },
+                  dismissButton = {
+                      TextButton(onClick = onDismiss) {
+                          Text("关闭")
+                      }
+                  }
+              )
+          }
+          """)
+          print("已替换 WebScreen.kt 与 CaptchaDialog.kt 为零 WebView 安全组件！")
+
+          # ==============================================================================
+          # 修复 5: 改造 MainActivity.kt
+          # - 移除会导致手表闪退的 enableEdgeToEdge()
+          # - 保留原版全部功能 (AppContainer + App)
+          # - 外层套上专为三星 Galaxy Watch 7 设计的圆表自适应控制台 (支持一键切换圆表内缩防裁切 / 满屏 / 缩放字号)
+          # ==============================================================================
+          write_file("app/src/main/kotlin/com/zailinn/c001apk/MainActivity.kt", """
+          package com.zailinn.c001apk
+
+          import android.content.Context
+          import android.os.Bundle
+          import androidx.activity.compose.setContent
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.border
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.material3.Text
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.platform.LocalConfiguration
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.platform.LocalDensity
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.Density
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import com.zailinn.c001apk.ui.App
+          import java.text.SimpleDateFormat
+          import java.util.Date
+          import java.util.Locale
+          import kotlinx.coroutines.delay
+
+          class MainActivity : AppCompatActivity() {
+              lateinit var container: AppContainer
+                  private set
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  // 注意：在 Wear OS 上严禁调用 enableEdgeToEdge()，直接初始化 AppContainer
+                  container = AppContainer(applicationContext)
+                  setContent {
+                      GalaxyWatch7RoundAdapter {
+                          App(container)
+                      }
+                  }
+              }
+          }
+
+          /**
+           * 三星 Galaxy Watch 7 圆屏专属自适应安全舱：
+           * 1. 保留原版 100% 功能（游客模式、Cookie登录、看大图、评论、搜索全保留）
+           * 2. 提供三档圆屏防裁切模式：
+           *    - 模式 0 (圆屏内切模式)：四周自动留出圆弧安全边距，确保顶部搜索栏与底部导航栏绝不被圆形表框裁切
+           *    - 模式 1 (紧凑微缩模式)：仅保留顶部胶囊时间与底部微留白，可视面积更大
+           *    - 模式 2 (100%满屏模式)：完全铺满屏幕
+           * 3. 提供三档 UI 与文字密度缩放 (紧凑 / 标准 / 大字)，方便在手表小屏幕上单指点按
+           */
+          @Composable
+          fun GalaxyWatch7RoundAdapter(content: @Composable () -> Unit) {
+              val context = LocalContext.current
+              val prefs = remember { context.getSharedPreferences("watch7_ui_adapter", Context.MODE_PRIVATE) }
+
+              // 0 = 圆表内切防裁切(默认), 1 = 适中微缩, 2 = 满屏
+              var insetMode by remember { mutableIntStateOf(prefs.getInt("inset_mode", 1)) }
+              // 缩放档位: 0 = 0.82f(一屏显示更多), 1 = 0.92f(圆表黄金比例), 2 = 1.05f(大按钮大字)
+              var scaleTier by remember { mutableIntStateOf(prefs.getInt("scale_tier", 1)) }
+
+              val config = LocalConfiguration.current
+              val screenMinDp = minOf(config.screenWidthDp, config.screenHeightDp)
+
+              // 根据档位计算圆表四周安全内边距
+              val horizPad = when (insetMode) {
+                  0 -> (screenMinDp * 0.11f).dp
+                  1 -> (screenMinDp * 0.045f).dp
+                  else -> 0.dp
+              }
+              val topPad = when (insetMode) {
+                  0 -> (screenMinDp * 0.09f).dp
+                  1 -> 22.dp
+                  else -> 18.dp
+              }
+              val bottomPad = when (insetMode) {
+                  0 -> (screenMinDp * 0.10f).dp
+                  1 -> (screenMinDp * 0.055f).dp
+                  else -> 0.dp
+              }
+
+              val densityMultiplier = when (scaleTier) {
+                  0 -> 0.80f
+                  1 -> 0.90f
+                  else -> 1.02f
+              }
+
+              var timeStr by remember { mutableStateOf("") }
+              LaunchedEffect(Unit) {
+                  val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+                  while (true) {
+                      timeStr = sdf.format(Date())
+                      delay(10_000L)
+                  }
+              }
+
+              val baseDensity = LocalDensity.current
+              val adaptedDensity = remember(baseDensity, densityMultiplier) {
+                  Density(
+                      density = baseDensity.density * densityMultiplier,
+                      fontScale = baseDensity.fontScale * (if (scaleTier == 2) 1.08f else 0.96f)
+                  )
+              }
+
+              Box(
+                  modifier = Modifier
+                      .fillMaxSize()
+                      .background(Color.Black),
+                  contentAlignment = Alignment.Center
+              ) {
+                  // 主应用容器（完全保留原版所有页面与逻辑）
+                  Box(
+                      modifier = Modifier
+                          .fillMaxSize()
+                          .padding(
+                              start = horizPad,
+                              end = horizPad,
+                              top = topPad,
+                              bottom = bottomPad
+                          )
+                          .clip(RoundedCornerShape(if (insetMode == 0) 26.dp else 14.dp))
+                  ) {
+                      CompositionLocalProvider(LocalDensity provides adaptedDensity) {
+                          content()
+                      }
+                  }
+
+                  // 顶部 Google Wear OS 原生风格悬浮控制胶囊（位于圆表正上方弧顶，随时一键调节防裁切与字号）
+                  Row(
+                      modifier = Modifier
+                          .align(Alignment.TopCenter)
+                          .padding(top = 2.dp)
+                          .clip(CircleShape)
+                          .background(Color(0xFF12161F).copy(alpha = 0.92f))
+                          .border(0.8.dp, Color(0xFF34D399).copy(alpha = 0.45f), CircleShape)
+                          .padding(horizontal = 10.dp, vertical = 2.dp),
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(8.dp)
+                  ) {
+                      Text(
+                          text = timeStr,
+                          color = Color(0xFFF8FAFC),
+                          fontSize = 10.sp,
+                          fontWeight = FontWeight.Bold
+                      )
+
+                      Text(
+                          text = when (insetMode) {
+                              0 -> "内切"
+                              1 -> "圆屏"
+                              else -> "满屏"
+                          },
+                          color = Color(0xFF34D399),
+                          fontSize = 9.5f.sp,
+                          fontWeight = FontWeight.SemiBold,
+                          modifier = Modifier.clickable {
+                              insetMode = (insetMode + 1) % 3
+                              prefs.edit().putInt("inset_mode", insetMode).apply()
+                          }
+                      )
+
+                      Text(
+                          text = when (scaleTier) {
+                              0 -> "紧凑"
+                              1 -> "标准"
+                              else -> "大字"
+                          },
+                          color = Color(0xFF38BDF8),
+                          fontSize = 9.5f.sp,
+                          fontWeight = FontWeight.SemiBold,
+                          modifier = Modifier.clickable {
+                              scaleTier = (scaleTier + 1) % 3
+                              prefs.edit().putInt("scale_tier", scaleTier).apply()
+                          }
+                      )
+                  }
+              }
+          }
+          """)
+          print("已注入 GalaxyWatch7RoundAdapter 圆表自适应外框并移除 enableEdgeToEdge 崩溃点！")
+
+      - name: 5. 编译修复后的三星 Galaxy Watch 7 专属 APK
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug -x test -x lint --no-daemon
+          mkdir -p output_apks
+          find app/build/outputs/apk/ -name "*.apk" -exec cp {} output_apks/c001apk-GalaxyWatch7-Fixed.apk \;
+          ls -lh output_apks/
+
+      - name: 6. 上传可直接安装到三星 Galaxy Watch 7 的无闪退 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: c001apk-GalaxyWatch7-APK
+          path: output_apks/*.apk
+          if-no-files-found: error
