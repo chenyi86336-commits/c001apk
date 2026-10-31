@@ -1,4 +1,4 @@
-name: "⭐【Watch7纯Bash零错版】Build Wear OS APK"
+name: "⭐【Watch7终极修复版】Build Wear OS APK"
 
 on:
   push:
@@ -26,7 +26,7 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
 
-      - name: 4. 纯 Bash 注入防闪退护盾与 Galaxy Watch 7 圆表适配层
+      - name: 4. 注入防闪退子类垫片与 Galaxy Watch 7 圆表适配层
         run: |
           echo "=== Step 4.1: 替换全局 WebSettings / CookieManager / WebStorage 静态调用 ==="
           find app/src/main/kotlin -name "*.kt" -type f -exec sed -i \
@@ -62,6 +62,7 @@ jobs:
           import android.os.Looper
           import android.util.Log
           import android.view.View
+          import android.webkit.CookieManager
           import android.webkit.ValueCallback
           import android.webkit.WebSettings
           import android.webkit.WebStorage
@@ -126,8 +127,6 @@ jobs:
           fun <T : View> WearSafeAndroidView(
               factory: (Context) -> T,
               modifier: Modifier = Modifier,
-              onReset: ((T) -> Unit)? = null,
-              onRelease: ((T) -> Unit)? = null,
               update: (T) -> Unit = {}
           ) {
               if (WearSafeWebkit.isNoWebView()) {
@@ -136,8 +135,6 @@ jobs:
                   androidx.compose.ui.viewinterop.AndroidView(
                       factory = factory,
                       modifier = modifier,
-                      onReset = onReset,
-                      onRelease = onRelease,
                       update = update
                   )
               }
@@ -395,97 +392,46 @@ jobs:
               }
           }
 
-          object WearSafeCookieManager {
-              fun getInstance(): WearSafeCookieManager {
-                  WearSafeWebkit.installCrashShield()
-                  return this
-              }
+          class WearSafeCookieManager : CookieManager() {
+              companion object {
+                  private val fallbackInstance by lazy { WearSafeCookieManager() }
 
-              fun setAcceptCookie(accept: Boolean) {
-                  try {
-                      if (!WearSafeWebkit.isNoWebView()) {
-                          android.webkit.CookieManager.getInstance().setAcceptCookie(accept)
+                  fun getInstance(): CookieManager {
+                      WearSafeWebkit.installCrashShield()
+                      return try {
+                          if (WearSafeWebkit.isNoWebView()) {
+                              fallbackInstance
+                          } else {
+                              android.webkit.CookieManager.getInstance()
+                          }
+                      } catch (_: Throwable) {
+                          fallbackInstance
                       }
-                  } catch (_: Throwable) {}
-              }
-
-              fun setAcceptThirdPartyCookies(webView: WebView?, accept: Boolean) {
-                  try {
-                      if (!WearSafeWebkit.isNoWebView() && webView != null) {
-                          android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView, accept)
-                      }
-                  } catch (_: Throwable) {}
-              }
-
-              fun getCookie(url: String?): String? {
-                  return try {
-                      if (WearSafeWebkit.isNoWebView() || url == null) null
-                      else android.webkit.CookieManager.getInstance().getCookie(url)
-                  } catch (_: Throwable) {
-                      null
                   }
               }
 
-              fun setCookie(url: String?, value: String?) {
-                  try {
-                      if (!WearSafeWebkit.isNoWebView() && url != null && value != null) {
-                          android.webkit.CookieManager.getInstance().setCookie(url, value)
-                      }
-                  } catch (_: Throwable) {}
+              override fun setAcceptCookie(accept: Boolean) {}
+              override fun acceptCookie(): Boolean = false
+              override fun setAcceptThirdPartyCookies(webview: WebView?, accept: Boolean) {}
+              override fun acceptThirdPartyCookies(webview: WebView?): Boolean = false
+              override fun setCookie(url: String?, value: String?) {}
+              override fun setCookie(url: String?, value: String?, callback: ValueCallback<Boolean>?) {
+                  try { callback?.onReceiveValue(false) } catch (_: Throwable) {}
               }
-
-              fun setCookie(url: String?, value: String?, callback: ValueCallback<Boolean>?) {
-                  try {
-                      if (!WearSafeWebkit.isNoWebView() && url != null && value != null) {
-                          android.webkit.CookieManager.getInstance().setCookie(url, value, callback)
-                      } else {
-                          callback?.onReceiveValue(false)
-                      }
-                  } catch (_: Throwable) {
-                      try { callback?.onReceiveValue(false) } catch (_: Throwable) {}
-                  }
+              override fun getCookie(url: String?): String? = null
+              override fun removeSessionCookie() {}
+              override fun removeSessionCookies(callback: ValueCallback<Boolean>?) {
+                  try { callback?.onReceiveValue(false) } catch (_: Throwable) {}
               }
-
-              fun removeAllCookies(callback: ValueCallback<Boolean>?) {
-                  try {
-                      if (!WearSafeWebkit.isNoWebView()) {
-                          android.webkit.CookieManager.getInstance().removeAllCookies(callback)
-                      } else {
-                          callback?.onReceiveValue(false)
-                      }
-                  } catch (_: Throwable) {
-                      try { callback?.onReceiveValue(false) } catch (_: Throwable) {}
-                  }
+              override fun removeAllCookie() {}
+              override fun removeAllCookies(callback: ValueCallback<Boolean>?) {
+                  try { callback?.onReceiveValue(false) } catch (_: Throwable) {}
               }
-
-              fun removeSessionCookies(callback: ValueCallback<Boolean>?) {
-                  try {
-                      if (!WearSafeWebkit.isNoWebView()) {
-                          android.webkit.CookieManager.getInstance().removeSessionCookies(callback)
-                      } else {
-                          callback?.onReceiveValue(false)
-                      }
-                  } catch (_: Throwable) {
-                      try { callback?.onReceiveValue(false) } catch (_: Throwable) {}
-                  }
-              }
-
-              fun flush() {
-                  try {
-                      if (!WearSafeWebkit.isNoWebView()) {
-                          android.webkit.CookieManager.getInstance().flush()
-                      }
-                  } catch (_: Throwable) {}
-              }
-
-              fun hasCookies(): Boolean {
-                  return try {
-                      if (WearSafeWebkit.isNoWebView()) false
-                      else android.webkit.CookieManager.getInstance().hasCookies()
-                  } catch (_: Throwable) {
-                      false
-                  }
-              }
+              override fun hasCookies(): Boolean = false
+              override fun removeExpiredCookie() {}
+              override fun flush() {}
+              override fun allowFileSchemeCookiesImpl(): Boolean = false
+              override fun setAcceptFileSchemeCookiesImpl(accept: Boolean) {}
           }
 
           object WearSafeWebStorage {
@@ -500,9 +446,6 @@ jobs:
               }
           }
           END_SHIM
-
-          echo "=== Step 4.6: 检查改造后的 MainActivity.kt ==="
-          cat app/src/main/kotlin/com/zailinn/c001apk/MainActivity.kt
 
       - name: 5. 编译最新版 Galaxy Watch 7 专属 APK
         run: |
