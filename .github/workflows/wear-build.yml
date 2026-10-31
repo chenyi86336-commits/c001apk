@@ -1,4 +1,4 @@
-name: "⭐【点我下载Watch7最终版】Build Wear OS APK"
+name: "⭐【Watch7纯Bash零错版】Build Wear OS APK"
 
 on:
   push:
@@ -26,377 +26,302 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
 
-      - name: 4. 精准语法树级防闪退改造与 Galaxy Watch 7 圆屏适配
-        shell: python3 {0}
+      - name: 4. 纯 Bash 注入防闪退护盾与 Galaxy Watch 7 圆表适配层
         run: |
-          import os, re, textwrap
+          echo "=== Step 4.1: 替换全局 WebSettings / CookieManager / WebStorage 静态调用 ==="
+          find app/src/main/kotlin -name "*.kt" -type f -exec sed -i \
+            -e 's/WebSettings\.getDefaultUserAgent(/com.zailinn.c001apk.WearSafeWebkit.getDefaultUserAgent(/g' \
+            -e 's/CookieManager\.getInstance()/com.zailinn.c001apk.WearSafeCookieManager.getInstance()/g' \
+            -e 's/WebStorage\.getInstance()/com.zailinn.c001apk.WearSafeWebStorage.getInstance()/g' \
+            {} +
 
-          def find_matching_brace(text: str, open_pos: int) -> int:
-              """精准寻找匹配的右花括号 '}'，自动跳过字符串和注释"""
-              depth = 0
-              i = open_pos
-              n = len(text)
-              in_string = False
-              in_char = False
-              in_line_comment = False
-              in_block_comment = False
-              while i < n:
-                  ch = text[i]
-                  nxt = text[i + 1] if i + 1 < n else ''
-                  if in_line_comment:
-                      if ch == '\n':
-                          in_line_comment = False
-                  elif in_block_comment:
-                      if ch == '*' and nxt == '/':
-                          in_block_comment = False
-                          i += 1
-                  elif in_string:
-                      if ch == '\\':
-                          i += 1
-                      elif ch == '"':
-                          in_string = False
-                  elif in_char:
-                      if ch == '\\':
-                          i += 1
-                      elif ch == "'":
-                          in_char = False
-                  else:
-                      if ch == '/' and nxt == '/':
-                          in_line_comment = True
-                          i += 1
-                      elif ch == '/' and nxt == '*':
-                          in_block_comment = True
-                          i += 1
-                      elif ch == '"':
-                          in_string = True
-                      elif ch == "'":
-                          in_char = True
-                      elif ch == '{':
-                          depth += 1
-                      elif ch == '}':
-                          depth -= 1
-                          if depth == 0:
-                              return i
-                  i += 1
-              return -1
+          echo "=== Step 4.2: 拦截 AppContainer 中的后台 WebView 实例创建 ==="
+          sed -i 's/\bWebView(/com.zailinn.c001apk.WearSafeWebkit.createWebViewOrThrow(/g' \
+            app/src/main/kotlin/com/zailinn/c001apk/AppContainer.kt
 
-          def replace_fun_body(code: str, fun_name: str, new_body_inner: str) -> str:
-              """保留原函数的完整参数签名与返回值，仅安全替换函数体 { ... } 内部逻辑"""
-              pattern = re.compile(r'\bfun\s+' + re.escape(fun_name) + r'\s*\(')
-              match = pattern.search(code)
-              if not match:
-                  print(f"  [跳过] 未找到函数 {fun_name}")
-                  return code
-              # 先跳过参数列表 (...)
-               idx = match.end() - 1
-              paren_depth = 0
-              while idx < len(code):
-                  if code[idx] == '(':
-                      paren_depth += 1
-                  elif code[idx] == ')':
-                      paren_depth -= 1
-                      if paren_depth == 0:
-                          idx += 1
-                          break
-                  idx += 1
-              # 寻找函数体的起始 '{'
-              brace_start = code.find('{', idx)
-              if brace_start == -1:
-                  return code
-              brace_end = find_matching_brace(code, brace_start)
-              if brace_end == -1:
-                  return code
-              print(f"  [成功] 已安全替换函数 {fun_name} 的内部实现")
-              return code[:brace_start + 1] + "\n" + new_body_inner + "\n" + code[brace_end:]
+          echo "=== Step 4.3: 接管 WebScreen 与 CaptchaDialog 中的 AndroidView 渲染 ==="
+          sed -i 's/import androidx\.compose\.ui\.viewinterop\.AndroidView/import com.zailinn.c001apk.WearSafeAndroidView as AndroidView/g' \
+            app/src/main/kotlin/com/zailinn/c001apk/ui/screens/web/WebScreen.kt \
+            app/src/main/kotlin/com/zailinn/c001apk/ui/screens/web/CaptchaDialog.kt
 
-          def wrap_fun_body_try_catch(code: str, fun_name: str, fallback: str = "") -> str:
-              """将原函数体 { ... } 原封不动包裹在 try { ... } catch (_: Throwable) 中"""
-              pattern = re.compile(r'\bfun\s+' + re.escape(fun_name) + r'\s*\(')
-              match = pattern.search(code)
-              if not match:
-                  return code
-              idx = match.end() - 1
-              paren_depth = 0
-              while idx < len(code):
-                  if code[idx] == '(':
-                      paren_depth += 1
-                  elif code[idx] == ')':
-                      paren_depth -= 1
-                      if paren_depth == 0:
-                          idx += 1
-                          break
-                  idx += 1
-              brace_start = code.find('{', idx)
-              if brace_start == -1:
-                  return code
-              brace_end = find_matching_brace(code, brace_start)
-              if brace_end == -1:
-                  return code
-              original_inner = code[brace_start + 1:brace_end]
-              wrapped = f"\n        try {{{original_inner}\n        }} catch (_: Throwable) {{ {fallback} }}\n    "
-              print(f"  [成功] 已为函数 {fun_name} 注入 Throwable 级防崩溃护盾")
-              return code[:brace_start + 1] + wrapped + code[brace_end:]
+          echo "=== Step 4.4: 接管 MainActivity 的 setContent 与 enableEdgeToEdge ==="
+          sed -i 's/enableEdgeToEdge()/wearSafeEnableEdgeToEdge()/g' \
+            app/src/main/kotlin/com/zailinn/c001apk/MainActivity.kt
+          sed -i 's/setContent/wearSafeSetContent/g' \
+            app/src/main/kotlin/com/zailinn/c001apk/MainActivity.kt
+          sed -i 's/import androidx\.activity\.compose\.wearSafeSetContent/import androidx.activity.compose.setContent/g' \
+            app/src/main/kotlin/com/zailinn/c001apk/MainActivity.kt
 
-          # ==============================================================================
-          # 1. 修复 AppContainer.kt：拦截 WebSettings、CookieManager、WebViewTransport
-          #    保留所有 import、函数签名和括号结构，绝不误删任何代码！
-          # ==============================================================================
-          ac_path = "app/src/main/kotlin/com/zailinn/c001apk/AppContainer.kt"
-          if os.path.exists(ac_path):
-              with open(ac_path, "r", encoding="utf-8") as f:
-                  ac_code = f.read()
+          echo "=== Step 4.5: 生成 WearSafeShim.kt 核心适配与防闪退文件 ==="
+          cat << 'END_SHIM' > app/src/main/kotlin/com/zailinn/c001apk/WearSafeShim.kt
+          package com.zailinn.c001apk
 
-              # (a) 将 WebSettings.getDefaultUserAgent(context) 包裹在 runCatching 中
-              ac_code = ac_code.replace(
-                  "WebSettings.getDefaultUserAgent(context)",
-                  'runCatching { WebSettings.getDefaultUserAgent(context) }.getOrDefault("Mozilla/5.0 (Linux; Android 14; SM-L310) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")'
-              )
+          import android.content.Context
+          import android.content.Intent
+          import android.net.Uri
+          import android.os.Looper
+          import android.util.Log
+          import android.view.View
+          import android.webkit.ValueCallback
+          import android.webkit.WebSettings
+          import android.webkit.WebStorage
+          import android.webkit.WebView
+          import android.widget.Toast
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+          import androidx.activity.compose.setContent
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.border
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.layout.Arrangement
+          import androidx.compose.foundation.layout.Box
+          import androidx.compose.foundation.layout.Column
+          import androidx.compose.foundation.layout.Row
+          import androidx.compose.foundation.layout.fillMaxSize
+          import androidx.compose.foundation.layout.padding
+          import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.material3.Button
+          import androidx.compose.material3.MaterialTheme
+          import androidx.compose.material3.OutlinedButton
+          import androidx.compose.material3.Surface
+          import androidx.compose.material3.Text
+          import androidx.compose.runtime.Composable
+          import androidx.compose.runtime.CompositionLocalProvider
+          import androidx.compose.runtime.LaunchedEffect
+          import androidx.compose.runtime.mutableStateOf
+          import androidx.compose.runtime.remember
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.platform.LocalConfiguration
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.platform.LocalDensity
+          import androidx.compose.ui.unit.Density
+          import androidx.compose.ui.unit.dp
+          import java.io.IOException
+          import java.text.SimpleDateFormat
+          import java.util.Date
+          import java.util.Locale
+          import kotlin.math.min
+          import kotlinx.coroutines.delay
 
-              # (b) 将 syncWebCookies 函数体包裹在 try-catch (_: Throwable) 中，防止 CookieManager.getInstance() 闪退
-              ac_code = wrap_fun_body_try_catch(ac_code, "syncWebCookies")
+          fun ComponentActivity.wearSafeEnableEdgeToEdge() {
+              WearSafeWebkit.installCrashShield()
+          }
 
-              # (c) 将 WebViewTransport.execute 函数体替换为直接抛 IOException，从而自动走原版 OkHttp 通道
-              ac_code = replace_fun_body(
-                  ac_code,
-                  "execute",
-                  '        throw java.io.IOException("Wear OS 手表无内置 WebView，已自动切换至原生网络层")'
-              )
+          fun ComponentActivity.wearSafeSetContent(
+              content: @Composable () -> Unit
+          ) {
+              WearSafeWebkit.installCrashShield()
+              setContent {
+                  WearSafeWebkit.Watch7AdaptiveContainer {
+                      content()
+                  }
+              }
+          }
 
-              with open(ac_path, "w", encoding="utf-8") as f:
-                  f.write(ac_code)
-              print("1. AppContainer.kt 防闪退补丁注入完成！")
+          @Composable
+          fun <T : View> WearSafeAndroidView(
+              factory: (Context) -> T,
+              modifier: Modifier = Modifier,
+              onReset: ((T) -> Unit)? = null,
+              onRelease: ((T) -> Unit)? = null,
+              update: (T) -> Unit = {}
+          ) {
+              if (WearSafeWebkit.isNoWebView()) {
+                  WearSafeWebkit.NoWebViewFallbackScreen(modifier)
+              } else {
+                  androidx.compose.ui.viewinterop.AndroidView(
+                      factory = factory,
+                      modifier = modifier,
+                      onReset = onReset,
+                      onRelease = onRelease,
+                      update = update
+                  )
+              }
+          }
 
-          # ==============================================================================
-          # 2. 修复 WebScreen.kt：保留原文件全部 import、辅助函数和参数签名，
-          #    仅将 WebScreen 组件体替换为零 WebView、零外部图标的手表安全页
-          # ==============================================================================
-          ws_path = "app/src/main/kotlin/com/zailinn/c001apk/ui/screens/web/WebScreen.kt"
-          if os.path.exists(ws_path):
-              with open(ws_path, "r", encoding="utf-8") as f:
-                  ws_code = f.read()
+          object WearSafeWebkit {
+              @Volatile
+              private var guardInstalled = false
 
-              ws_code = wrap_fun_body_try_catch(ws_code, "syncCookiesFromWebView")
+              fun installCrashShield() {
+                  if (guardInstalled) return
+                  guardInstalled = true
+                  val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+                  Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                      Log.e("WearSafeWebkit", "Intercepted crash on " + thread.name, throwable)
+                      if (thread == Looper.getMainLooper().thread) {
+                          while (true) {
+                              try {
+                                  Looper.loop()
+                              } catch (t: Throwable) {
+                                  Log.e("WearSafeWebkit", "Recovered main looper crash", t)
+                              }
+                          }
+                      } else {
+                          try {
+                              defaultHandler?.uncaughtException(thread, throwable)
+                          } catch (_: Throwable) {}
+                      }
+                  }
+              }
 
-              safe_web_screen_body = textwrap.dedent("""
-                  val navigator = com.zailinn.c001apk.ui.nav.LocalNavigator.current
-                  val context = androidx.compose.ui.platform.LocalContext.current
-                  androidx.compose.material3.Surface(
-                      modifier = androidx.compose.ui.Modifier.fillMaxSize(),
-                      color = androidx.compose.ui.graphics.Color.Black,
-                      contentColor = androidx.compose.ui.graphics.Color.White
+              fun isNoWebView(): Boolean {
+                  return try {
+                      val pkg = WebView.getCurrentWebViewPackage()
+                      if (pkg == null) return true
+                      android.webkit.CookieManager.getInstance()
+                      false
+                  } catch (_: Throwable) {
+                      true
+                  }
+              }
+
+              fun createWebViewOrThrow(context: Context): WebView {
+                  installCrashShield()
+                  if (isNoWebView()) {
+                      throw IOException("Wear OS has no WebView")
+                  }
+                  return WebView(context)
+              }
+
+              fun getDefaultUserAgent(context: Context): String {
+                  installCrashShield()
+                  return try {
+                      if (isNoWebView()) {
+                          "Mozilla/5.0 (Linux; Android 14; SM-L310) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                      } else {
+                          WebSettings.getDefaultUserAgent(context)
+                      }
+                  } catch (_: Throwable) {
+                      "Mozilla/5.0 (Linux; Android 14; SM-L310) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                  }
+              }
+
+              @Composable
+              fun NoWebViewFallbackScreen(modifier: Modifier = Modifier) {
+                  val context = LocalContext.current
+                  val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+                  Surface(
+                      modifier = modifier.fillMaxSize(),
+                      color = Color.Black,
+                      contentColor = Color.White
                   ) {
-                      androidx.compose.foundation.layout.Column(
-                          modifier = androidx.compose.ui.Modifier
+                      Column(
+                          modifier = Modifier
                               .fillMaxSize()
                               .padding(16.dp),
-                          horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
-                          verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp, androidx.compose.ui.Alignment.CenterVertically)
+                          horizontalAlignment = Alignment.CenterHorizontally,
+                          verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically)
                       ) {
-                          androidx.compose.material3.Text(
-                              text = title.ifBlank { "腕上网页保护" },
-                              style = androidx.compose.material3.MaterialTheme.typography.titleSmall,
-                              color = androidx.compose.ui.graphics.Color(0xFF34D399),
-                              maxLines = 1
+                          Text(
+                              text = "腕上免 WebView 保护",
+                              style = MaterialTheme.typography.titleMedium,
+                              color = Color(0xFF34D399)
                           )
-                          androidx.compose.material3.Text(
-                              text = if (onCookieObtained != null) {
-                                  "三星 Watch 7 无内置 WebView。请返回使用原版「Cookie 导入」登录，或直接使用游客模式浏览！"
-                              } else {
-                                  url
-                              },
-                              style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                              color = androidx.compose.ui.graphics.Color(0xFFCBD5E1),
-                              maxLines = 4
+                          Text(
+                              text = "三星 Galaxy Watch 7 无内置 WebView。登录请返回使用原版「Cookie 导入」，或直接以游客模式浏览全部内容与图片！",
+                              style = MaterialTheme.typography.bodySmall,
+                              color = Color(0xFFCBD5E1)
                           )
-                          androidx.compose.foundation.layout.Row(
-                              horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)
-                          ) {
-                              androidx.compose.material3.OutlinedButton(
-                                  onClick = { navigator.pop() }
-                              ) {
-                                  androidx.compose.material3.Text("返回")
+                          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                              OutlinedButton(onClick = { backDispatcher?.onBackPressed() }) {
+                                  Text("返回")
                               }
-                              androidx.compose.material3.Button(
+                              Button(
                                   onClick = {
                                       try {
-                                          val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
-                                              addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                          val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.coolapk.com")).apply {
+                                              addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                           }
                                           context.startActivity(intent)
                                       } catch (_: Throwable) {
-                                          android.widget.Toast.makeText(context, "手表未安装浏览器", android.widget.Toast.LENGTH_SHORT).show()
+                                          Toast.makeText(context, "已拦截网页闪退，请点返回继续使用", Toast.LENGTH_SHORT).show()
                                       }
                                   }
                               ) {
-                                  androidx.compose.material3.Text("外部打开")
+                                  Text("外部打开")
                               }
                           }
                       }
                   }
-              """)
-              ws_code = replace_fun_body(ws_code, "WebScreen", safe_web_screen_body)
+              }
 
-              with open(ws_path, "w", encoding="utf-8") as f:
-                  f.write(ws_code)
-              print("2. WebScreen.kt 防闪退补丁注入完成！")
-
-          # ==============================================================================
-          # 3. 修复 CaptchaDialog.kt：保留原文件全部参数签名，仅替换弹窗内容为免 WebView 提示
-          # ==============================================================================
-          cd_path = "app/src/main/kotlin/com/zailinn/c001apk/ui/screens/web/CaptchaDialog.kt"
-          if os.path.exists(cd_path):
-              with open(cd_path, "r", encoding="utf-8") as f:
-                  cd_code = f.read()
-
-              safe_captcha_body = textwrap.dedent("""
-                  androidx.compose.material3.AlertDialog(
-                      onDismissRequest = onDismiss,
-                      title = { androidx.compose.material3.Text("腕上安全验证保护") },
-                      text = {
-                          androidx.compose.material3.Text(
-                              "手表系统无 WebView 组件，已自动拦截网页验证码以防止闪退。可在设置中导入 Cookie 或点击重试。"
-                          )
-                      },
-                      confirmButton = {
-                          androidx.compose.material3.TextButton(onClick = onSolved) {
-                              androidx.compose.material3.Text("重试")
-                          }
-                      },
-                      dismissButton = {
-                          androidx.compose.material3.TextButton(onClick = onDismiss) {
-                              androidx.compose.material3.Text("取消")
-                          }
-                      }
-                  )
-              """)
-              cd_code = replace_fun_body(cd_code, "CaptchaDialog", safe_captcha_body)
-
-              with open(cd_path, "w", encoding="utf-8") as f:
-                  f.write(cd_code)
-              print("3. CaptchaDialog.kt 防闪退补丁注入完成！")
-
-          # ==============================================================================
-          # 4. 加固 C001apkApplication.kt、Haptics.kt、ImageHdr.kt
-          # ==============================================================================
-          for extra_path, fn_names in [
-              ("app/src/main/kotlin/com/zailinn/c001apk/C001apkApplication.kt", ["onCreate"]),
-              ("app/src/main/kotlin/com/zailinn/c001apk/ui/common/Haptics.kt", ["performHaptic"]),
-              ("app/src/main/kotlin/com/zailinn/c001apk/ui/common/ImageHdr.kt", ["setHdrColorMode"]),
-          ]:
-              if os.path.exists(extra_path):
-                  with open(extra_path, "r", encoding="utf-8") as f:
-                      ec = f.read()
-                  for fn in fn_names:
-                      ec = wrap_fun_body_try_catch(ec, fn)
-                  with open(extra_path, "w", encoding="utf-8") as f:
-                      f.write(ec)
-
-          # ==============================================================================
-          # 5. 改造 MainActivity.kt：
-          #    保留原版 ComponentActivity 继承关系，移除 enableEdgeToEdge()，
-          #    注入专为三星 Galaxy Watch 7 圆屏设计的 Google Wear OS 风格圆弧表盘自适应壳！
-          # ==============================================================================
-          ma_path = "app/src/main/kotlin/com/zailinn/c001apk/MainActivity.kt"
-          if os.path.exists(ma_path):
-              with open(ma_path, "r", encoding="utf-8") as f:
-                  orig_ma = f.read()
-              print("原版 MainActivity.kt 内容如下：\n" + orig_ma)
-
-              # 注释掉 enableEdgeToEdge()
-              patched_ma = re.sub(r'\benableEdgeToEdge\s*\(\s*\)', '// enableEdgeToEdge()', orig_ma)
-
-              # 将 App(...) 包裹在 GalaxyWatch7RoundShell 中
-              patched_ma = re.sub(
-                  r'\bApp\s*\(([^)]*)\)',
-                  r'GalaxyWatch7RoundShell { App(\1) }',
-                  patched_ma,
-                  count=1
-              )
-
-              # 在文件末尾追加 GalaxyWatch7RoundShell 实现（仅使用 100% 必存在的全限定名或基础组件）
-              watch_shell_code = textwrap.dedent("""
-
-              @androidx.compose.runtime.Composable
-              fun GalaxyWatch7RoundShell(content: @androidx.compose.runtime.Composable () -> Unit) {
-                  val context = androidx.compose.ui.platform.LocalContext.current
-                  val prefs = androidx.compose.runtime.remember {
-                      context.getSharedPreferences("watch7_round_shell", android.content.Context.MODE_PRIVATE)
+              @Composable
+              fun Watch7AdaptiveContainer(content: @Composable () -> Unit) {
+                  installCrashShield()
+                  val context = LocalContext.current
+                  val prefs = remember {
+                      context.getSharedPreferences("watch7_ui_prefs", Context.MODE_PRIVATE)
                   }
 
-                  // 0 = 圆表防裁切模式(默认，完美内嵌于三星Watch7圆屏内)
-                  // 1 = 微缩扩屏模式
-                  // 2 = 原始满屏模式
-                  val insetModeState = androidx.compose.runtime.remember {
-                      androidx.compose.runtime.mutableStateOf(prefs.getInt("inset_mode", 0))
-                  }
-                  // 0 = 腕上精致比例(0.68x，一屏显示完整导航与卡片)
-                  // 1 = 适中比例(0.80x)
-                  // 2 = 大字比例(0.92x)
-                  val scaleModeState = androidx.compose.runtime.remember {
-                      androidx.compose.runtime.mutableStateOf(prefs.getInt("scale_mode", 0))
-                  }
+                  val insetModeState = remember { mutableStateOf(prefs.getInt("inset_mode", 0)) }
+                  val scaleModeState = remember { mutableStateOf(prefs.getInt("scale_mode", 0)) }
+                  val pillExpandedState = remember { mutableStateOf(true) }
 
                   val insetMode = insetModeState.value
                   val scaleMode = scaleModeState.value
+                  val pillExpanded = pillExpandedState.value
 
-                  val config = androidx.compose.ui.platform.LocalConfiguration.current
-                  val minScreenDp = kotlin.math.min(config.screenWidthDp, config.screenHeightDp)
+                  val config = LocalConfiguration.current
+                  val minDp = min(config.screenWidthDp, config.screenHeightDp)
 
-                  // 针对 Galaxy Watch 7 圆形表盘计算黄金安全内边距，确保四角绝不被圆形表框裁切
                   val sidePad = when (insetMode) {
-                      0 -> androidx.compose.ui.unit.Dp(minScreenDp * 0.095f)
-                      1 -> androidx.compose.ui.unit.Dp(minScreenDp * 0.045f)
-                      else -> androidx.compose.ui.unit.Dp(0f)
+                      0 -> (minDp * 0.095f).dp
+                      1 -> (minDp * 0.045f).dp
+                      else -> 0.dp
                   }
                   val topPad = when (insetMode) {
-                      0 -> androidx.compose.ui.unit.Dp(minScreenDp * 0.115f)
-                      1 -> androidx.compose.ui.unit.Dp(minScreenDp * 0.085f)
-                      else -> androidx.compose.ui.unit.Dp(18f)
+                      0 -> (minDp * 0.115f).dp
+                      1 -> (minDp * 0.08f).dp
+                      else -> 16.dp
                   }
                   val bottomPad = when (insetMode) {
-                      0 -> androidx.compose.ui.unit.Dp(minScreenDp * 0.095f)
-                      1 -> androidx.compose.ui.unit.Dp(minScreenDp * 0.045f)
-                      else -> androidx.compose.ui.unit.Dp(0f)
+                      0 -> (minDp * 0.095f).dp
+                      1 -> (minDp * 0.045f).dp
+                      else -> 0.dp
                   }
 
                   val densityFactor = when (scaleMode) {
-                      0 -> 0.68f
-                      1 -> 0.80f
-                      else -> 0.92f
+                      0 -> 0.66f
+                      1 -> 0.78f
+                      else -> 0.90f
                   }
 
-                  val timeState = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
-                  androidx.compose.runtime.LaunchedEffect(Unit) {
-                      val sdf = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+                  val timeTextState = remember { mutableStateOf("") }
+                  LaunchedEffect(Unit) {
+                      val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
                       while (true) {
-                          timeState.value = sdf.format(java.util.Date())
-                          kotlinx.coroutines.delay(10000L)
+                          timeTextState.value = sdf.format(Date())
+                          delay(10000L)
                       }
                   }
 
-                  val currentDensity = androidx.compose.ui.platform.LocalDensity.current
-                  val watchDensity = androidx.compose.runtime.remember(currentDensity, densityFactor, scaleMode) {
-                      androidx.compose.ui.unit.Density(
-                          density = currentDensity.density * densityFactor,
-                          fontScale = currentDensity.fontScale * (if (scaleMode == 2) 1.08f else 0.96f)
+                  val origDensity = LocalDensity.current
+                  val watchDensity = remember(origDensity, densityFactor, scaleMode) {
+                      Density(
+                          density = origDensity.density * densityFactor,
+                          fontScale = origDensity.fontScale * (if (scaleMode == 2) 1.08f else 0.96f)
                       )
                   }
 
-                  val cornerRadius = when (insetMode) {
-                      0 -> androidx.compose.ui.unit.Dp(28f)
-                      1 -> androidx.compose.ui.unit.Dp(16f)
-                      else -> androidx.compose.ui.unit.Dp(0f)
+                  val cornerDp = when (insetMode) {
+                      0 -> 28.dp
+                      1 -> 16.dp
+                      else -> 0.dp
                   }
 
-                  androidx.compose.foundation.layout.Box(
-                      modifier = androidx.compose.ui.Modifier
+                  Box(
+                      modifier = Modifier
                           .fillMaxSize()
-                          .background(androidx.compose.ui.graphics.Color.Black),
-                      contentAlignment = androidx.compose.ui.Alignment.Center
+                          .background(Color.Black),
+                      contentAlignment = Alignment.Center
                   ) {
-                      // 主应用安全视口容器（保留原版 Cookie登录、游客模式、看大图、搜索、备份全部功能）
-                      androidx.compose.foundation.layout.Box(
-                          modifier = androidx.compose.ui.Modifier
+                      Box(
+                          modifier = Modifier
                               .fillMaxSize()
                               .padding(
                                   start = sidePad,
@@ -404,102 +329,180 @@ jobs:
                                   top = topPad,
                                   bottom = bottomPad
                               )
-                              .clip(androidx.compose.foundation.shape.RoundedCornerShape(cornerRadius))
+                              .clip(RoundedCornerShape(cornerDp))
                               .border(
-                                  width = androidx.compose.ui.unit.Dp(if (insetMode == 2) 0f else 1f),
-                                  color = androidx.compose.ui.graphics.Color(0xFF1E293B),
-                                  shape = androidx.compose.foundation.shape.RoundedCornerShape(cornerRadius)
+                                  width = if (insetMode == 2) 0.dp else 1.dp,
+                                  color = Color(0xFF1E293B),
+                                  shape = RoundedCornerShape(cornerDp)
                               )
                       ) {
-                          androidx.compose.runtime.CompositionLocalProvider(
-                              androidx.compose.ui.platform.LocalDensity provides watchDensity
-                          ) {
+                          CompositionLocalProvider(LocalDensity provides watchDensity) {
                               content()
                           }
                       }
 
-                      // Google Wear OS 原生风格顶部弧形时间与快捷控制胶囊
-                      androidx.compose.foundation.layout.Row(
-                          modifier = androidx.compose.ui.Modifier
-                              .align(androidx.compose.ui.Alignment.TopCenter)
-                              .padding(top = androidx.compose.ui.unit.Dp(3f))
-                              .clip(androidx.compose.foundation.shape.CircleShape)
-                              .background(androidx.compose.ui.graphics.Color(0xFF111827))
-                              .border(
-                                  width = androidx.compose.ui.unit.Dp(1f),
-                                  color = androidx.compose.ui.graphics.Color(0xFF34D399).copy(alpha = 0.5f),
-                                  shape = androidx.compose.foundation.shape.CircleShape
-                              )
-                              .padding(
-                                  horizontal = androidx.compose.ui.unit.Dp(10f),
-                                  vertical = androidx.compose.ui.unit.Dp(2f)
-                              ),
-                          verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                          horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(
-                              androidx.compose.ui.unit.Dp(6f)
-                          )
+                      Row(
+                          modifier = Modifier
+                              .align(Alignment.TopCenter)
+                              .padding(top = 2.dp)
+                              .clip(CircleShape)
+                              .background(Color(0xFF0F172A))
+                              .border(1.dp, Color(0xFF34D399).copy(alpha = 0.5f), CircleShape)
+                              .padding(horizontal = 8.dp, vertical = 2.dp),
+                          verticalAlignment = Alignment.CenterVertically,
+                          horizontalArrangement = Arrangement.spacedBy(6.dp)
                       ) {
-                          androidx.compose.material3.Text(
-                              text = timeState.value,
-                              color = androidx.compose.ui.graphics.Color.White,
-                              style = androidx.compose.material3.MaterialTheme.typography.labelSmall
-                          )
-                          androidx.compose.material3.Text(
-                              text = when (insetMode) {
-                                  0 -> "◎圆屏"
-                                  1 -> "◯扩屏"
-                                  else -> "□满屏"
-                              },
-                              color = androidx.compose.ui.graphics.Color(0xFF34D399),
-                              style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
-                              modifier = androidx.compose.ui.Modifier.clickable {
-                                  val next = (insetMode + 1) % 3
-                                  insetModeState.value = next
-                                  prefs.edit().putInt("inset_mode", next).apply()
+                          Text(
+                              text = timeTextState.value,
+                              color = Color.White,
+                              style = MaterialTheme.typography.labelSmall,
+                              modifier = Modifier.clickable {
+                                  pillExpandedState.value = !pillExpanded
                               }
                           )
-                          androidx.compose.material3.Text(
-                              text = when (scaleMode) {
-                                  0 -> "Aa精致"
-                                  1 -> "Aa适中"
-                                  else -> "Aa大字"
-                              },
-                              color = androidx.compose.ui.graphics.Color(0xFF38BDF8),
-                              style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
-                              modifier = androidx.compose.ui.Modifier.clickable {
-                                  val next = (scaleMode + 1) % 3
-                                  scaleModeState.value = next
-                                  prefs.edit().putInt("scale_mode", next).apply()
-                              }
-                          )
+                          if (pillExpanded) {
+                              Text(
+                                  text = when (insetMode) {
+                                      0 -> "◎圆屏"
+                                      1 -> "◯扩屏"
+                                      else -> "□满屏"
+                                  },
+                                  color = Color(0xFF34D399),
+                                  style = MaterialTheme.typography.labelSmall,
+                                  modifier = Modifier.clickable {
+                                      val next = (insetMode + 1) % 3
+                                      insetModeState.value = next
+                                      prefs.edit().putInt("inset_mode", next).apply()
+                                  }
+                              )
+                              Text(
+                                  text = when (scaleMode) {
+                                      0 -> "Aa小"
+                                      1 -> "Aa中"
+                                      else -> "Aa大"
+                                  },
+                                  color = Color(0xFF38BDF8),
+                                  style = MaterialTheme.typography.labelSmall,
+                                  modifier = Modifier.clickable {
+                                      val next = (scaleMode + 1) % 3
+                                      scaleModeState.value = next
+                                      prefs.edit().putInt("scale_mode", next).apply()
+                                  }
+                              )
+                          }
                       }
                   }
               }
-              """)
+          }
 
-              # 确保存在必要的 import
-              needed_imports = [
-                  "import androidx.compose.foundation.background",
-                  "import androidx.compose.foundation.border",
-                  "import androidx.compose.foundation.clickable",
-                  "import androidx.compose.foundation.layout.fillMaxSize",
-                  "import androidx.compose.foundation.layout.padding",
-                  "import androidx.compose.ui.draw.clip",
-              ]
-              lines = patched_ma.splitlines()
-              pkg_idx = 0
-              for i, line in enumerate(lines):
-                  if line.startswith("package "):
-                      pkg_idx = i + 1
-                      break
-              for imp in needed_imports:
-                  if imp not in patched_ma:
-                      lines.insert(pkg_idx, imp)
+          object WearSafeCookieManager {
+              fun getInstance(): WearSafeCookieManager {
+                  WearSafeWebkit.installCrashShield()
+                  return this
+              }
 
-              final_ma = "\n".join(lines) + "\n" + watch_shell_code
-              with open(ma_path, "w", encoding="utf-8") as f:
-                  f.write(final_ma)
-              print("5. MainActivity.kt 圆表自适应壳注入完成！")
+              fun setAcceptCookie(accept: Boolean) {
+                  try {
+                      if (!WearSafeWebkit.isNoWebView()) {
+                          android.webkit.CookieManager.getInstance().setAcceptCookie(accept)
+                      }
+                  } catch (_: Throwable) {}
+              }
+
+              fun setAcceptThirdPartyCookies(webView: WebView?, accept: Boolean) {
+                  try {
+                      if (!WearSafeWebkit.isNoWebView() && webView != null) {
+                          android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView, accept)
+                      }
+                  } catch (_: Throwable) {}
+              }
+
+              fun getCookie(url: String?): String? {
+                  return try {
+                      if (WearSafeWebkit.isNoWebView() || url == null) null
+                      else android.webkit.CookieManager.getInstance().getCookie(url)
+                  } catch (_: Throwable) {
+                      null
+                  }
+              }
+
+              fun setCookie(url: String?, value: String?) {
+                  try {
+                      if (!WearSafeWebkit.isNoWebView() && url != null && value != null) {
+                          android.webkit.CookieManager.getInstance().setCookie(url, value)
+                      }
+                  } catch (_: Throwable) {}
+              }
+
+              fun setCookie(url: String?, value: String?, callback: ValueCallback<Boolean>?) {
+                  try {
+                      if (!WearSafeWebkit.isNoWebView() && url != null && value != null) {
+                          android.webkit.CookieManager.getInstance().setCookie(url, value, callback)
+                      } else {
+                          callback?.onReceiveValue(false)
+                      }
+                  } catch (_: Throwable) {
+                      try { callback?.onReceiveValue(false) } catch (_: Throwable) {}
+                  }
+              }
+
+              fun removeAllCookies(callback: ValueCallback<Boolean>?) {
+                  try {
+                      if (!WearSafeWebkit.isNoWebView()) {
+                          android.webkit.CookieManager.getInstance().removeAllCookies(callback)
+                      } else {
+                          callback?.onReceiveValue(false)
+                      }
+                  } catch (_: Throwable) {
+                      try { callback?.onReceiveValue(false) } catch (_: Throwable) {}
+                  }
+              }
+
+              fun removeSessionCookies(callback: ValueCallback<Boolean>?) {
+                  try {
+                      if (!WearSafeWebkit.isNoWebView()) {
+                          android.webkit.CookieManager.getInstance().removeSessionCookies(callback)
+                      } else {
+                          callback?.onReceiveValue(false)
+                      }
+                  } catch (_: Throwable) {
+                      try { callback?.onReceiveValue(false) } catch (_: Throwable) {}
+                  }
+              }
+
+              fun flush() {
+                  try {
+                      if (!WearSafeWebkit.isNoWebView()) {
+                          android.webkit.CookieManager.getInstance().flush()
+                      }
+                  } catch (_: Throwable) {}
+              }
+
+              fun hasCookies(): Boolean {
+                  return try {
+                      if (WearSafeWebkit.isNoWebView()) false
+                      else android.webkit.CookieManager.getInstance().hasCookies()
+                  } catch (_: Throwable) {
+                      false
+                  }
+              }
+          }
+
+          object WearSafeWebStorage {
+              fun getInstance(): WearSafeWebStorage = this
+
+              fun deleteAllData() {
+                  try {
+                      if (!WearSafeWebkit.isNoWebView()) {
+                          WebStorage.getInstance().deleteAllData()
+                      }
+                  } catch (_: Throwable) {}
+              }
+          }
+          END_SHIM
+
+          echo "=== Step 4.6: 检查改造后的 MainActivity.kt ==="
+          cat app/src/main/kotlin/com/zailinn/c001apk/MainActivity.kt
 
       - name: 5. 编译最新版 Galaxy Watch 7 专属 APK
         run: |
